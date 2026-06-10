@@ -1,0 +1,136 @@
+name: Offer Letter Processing
+
+on:
+  repository_dispatch:
+    types: [offer-uploaded, onboarding-approved]
+  workflow_dispatch:
+    inputs:
+      emp_id:
+        description: "Employee ID (e.g. EMP-ABCD1234)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  process-offer:
+    name: Process Offer Letter
+    runs-on: ubuntu-latest
+
+    env:
+      EMP_ID: ${{ github.event.client_payload.emp_id || inputs.emp_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      # ── Step 1: Invoke offer_processor Lambda (primary path) ───────────────
+      # Sends a synthetic S3 ObjectCreated event so Lambda extracts employee
+      # data, fills the NDA template, and writes outputs back to S3.
+      - name: Invoke offer_processor Lambda
+        id: invoke_lambda
+        run: |
+          set -euo pipefail
+          FUNCTION_NAME="${{ secrets.PROJECT_NAME }}-offer-processor"
+          BUCKET="${{ secrets.S3_BUCKET }}"
+          EMP_ID="${{ env.EMP_ID }}"
+
+          echo "EMP_ID: $EMP_ID"
+          echo "Bucket: $BUCKET"
+          echo "Function: $FUNCTION_NAME"
+
+          # Build synthetic S3 event
+          PAYLOAD=$(python3 << PYEOF
+          import json
+          event = {
+            "Records": [{
+              "s3": {
+                "bucket": {"name": "$BUCKET"},
+                "object": {"key": "employees/$EMP_ID/offer-letter.pdf", "size": 1}
+              }
+            }]
+          }
+          print(json.dumps(event))
+          PYEOF
+          )
+
+          aws lambda invoke \
+            --function-name "$FUNCTION_NAME" \
+            --payload "$PAYLOAD" \
+            --cli-binary-format raw-in-base64-out \
+            --no-cli-pager \
+            /tmp/lambda-response.json
+
+          echo "=== Lambda Response ==="
+          cat /tmp/lambda-response.json
+
+          # Fail if Lambda returned a function error
+          if python3 -c "
+          import json, sys
+          r = json.load(open('/tmp/lambda-response.json'))
+          if 'errorMessage' in r or 'FunctionError' in r:
+              print('ERROR:', r.get('errorMessage', 'FunctionError'))
+              sys.exit(1)
+          print('Lambda OK, statusCode:', r.get('statusCode', 200))
+          "; then
+            echo "Lambda invoked successfully"
+          else
+            echo "Lambda returned error — will fall back to inline"
+            exit 1
+          fi
+
+      # ── Step 2: Fallback — run inline if Lambda is unavailable ────────────
+      - name: Fallback — inline offer processing
+        if: failure() && steps.invoke_lambda.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          pip install --quiet pypdf fpdf2 pyyaml python-dateutil boto3 anthropic
+
+          mkdir -p "data/employees/${{ env.EMP_ID }}"
+          aws s3 cp \
+            "s3://${{ secrets.S3_BUCKET }}/employees/${{ env.EMP_ID }}/offer-letter.pdf" \
+            "data/employees/${{ env.EMP_ID }}/offer-letter.pdf"
+
+          python3 - << 'PYEOF'
+          import sys
+          sys.path.insert(0, 'lambda')
+          from offer_processor import process_offer_letter_local
+          from pathlib import Path
+          import os
+          emp_id = os.environ['EMP_ID']
+          process_offer_letter_local(
+              f'data/employees/{emp_id}/offer-letter.pdf',
+              emp_id,
+              Path('data')
+          )
+          PYEOF
+
+          aws s3 sync \
+            "data/employees/${{ env.EMP_ID }}/" \
+            "s3://${{ secrets.S3_BUCKET }}/employees/${{ env.EMP_ID }}/"
+
+      # ── Step 3: Verify outputs landed in S3 ───────────────────────────────
+      - name: Verify S3 outputs
+        run: |
+          set -euo pipefail
+          BUCKET="${{ secrets.S3_BUCKET }}"
+          PREFIX="employees/${{ env.EMP_ID }}"
+
+          echo "Checking outputs for ${{ env.EMP_ID }} ..."
+          for KEY in employee.json nda-content.txt nda-unsigned.pdf; do
+            aws s3api head-object \
+              --bucket "$BUCKET" \
+              --key "${PREFIX}/${KEY}" \
+              --no-cli-pager \
+              && echo "  OK  ${KEY}" \
+              || { echo "  MISSING: ${KEY}"; exit 1; }
+          done
+          echo "All S3 outputs verified."

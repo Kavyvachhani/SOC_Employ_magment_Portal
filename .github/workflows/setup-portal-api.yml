@@ -1,0 +1,239 @@
+name: Setup Portal API Lambda
+
+# One-time (and re-runnable) workflow to:
+# 1. Create attest-portal-api Lambda (if it doesn't exist)
+# 2. Deploy the function code
+# 3. Create API Gateway routes: /portal/{proxy+} → portal-api Lambda
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "lambda/portal_api.py"
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION:    ${{ secrets.AWS_REGION }}
+  S3_BUCKET:     ${{ secrets.S3_BUCKET }}
+  PROJECT_NAME:  ${{ secrets.PROJECT_NAME }}
+  FUNCTION_NAME: ${{ secrets.PROJECT_NAME }}-portal-api
+
+jobs:
+  deploy-portal-api:
+    name: Deploy Portal API Lambda
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build deployment package
+        run: |
+          set -euo pipefail
+          BUILD_DIR="build/portal_api"
+          mkdir -p "$BUILD_DIR"
+          pip install --quiet -r lambda/requirements.txt -t "$BUILD_DIR/"
+          cp lambda/portal_api.py "$BUILD_DIR/"
+          cd "$BUILD_DIR"
+          zip -r "../../portal_api.zip" . -x "*.pyc" -x "__pycache__/*"
+          cd ../..
+          echo "Package size: $(du -sh portal_api.zip | cut -f1)"
+
+      - name: Get Lambda execution role ARN
+        id: get_role
+        run: |
+          # Reuse the same execution role as the other Lambdas
+          ROLE_ARN=$(aws iam list-roles \
+            --query "Roles[?contains(RoleName, 'attest') && contains(RoleName, 'lambda')].Arn | [0]" \
+            --output text --no-cli-pager 2>/dev/null || echo "")
+
+          if [ -z "$ROLE_ARN" ] || [ "$ROLE_ARN" = "None" ]; then
+            # Try alternate naming
+            ROLE_ARN=$(aws iam list-roles \
+              --query "Roles[?contains(RoleName, 'attest')].Arn | [0]" \
+              --output text --no-cli-pager 2>/dev/null || echo "")
+          fi
+
+          if [ -z "$ROLE_ARN" ] || [ "$ROLE_ARN" = "None" ]; then
+            echo "Could not find attest Lambda role. Available roles:"
+            aws iam list-roles --query "Roles[*].RoleName" --output table --no-cli-pager
+            exit 1
+          fi
+          echo "role_arn=$ROLE_ARN" >> "$GITHUB_OUTPUT"
+          echo "Using role: $ROLE_ARN"
+
+      - name: Create or update Lambda function
+        run: |
+          set -euo pipefail
+          FUNCTION_NAME="${{ env.FUNCTION_NAME }}"
+          ROLE_ARN="${{ steps.get_role.outputs.role_arn }}"
+
+          EXISTS=$(aws lambda get-function \
+            --function-name "$FUNCTION_NAME" \
+            --query 'Configuration.FunctionName' \
+            --output text --no-cli-pager 2>/dev/null || echo "")
+
+          if [ -z "$EXISTS" ] || [ "$EXISTS" = "None" ]; then
+            echo "Creating new Lambda function: $FUNCTION_NAME"
+            aws lambda create-function \
+              --function-name "$FUNCTION_NAME" \
+              --runtime python3.12 \
+              --role "$ROLE_ARN" \
+              --handler portal_api.handler \
+              --zip-file fileb://portal_api.zip \
+              --timeout 30 \
+              --memory-size 256 \
+              --environment "Variables={
+                S3_BUCKET=${{ secrets.S3_BUCKET }},
+                PROJECT_GITHUB_TOKEN=${{ secrets.PROJECT_GITHUB_TOKEN }},
+                PROJECT_GITHUB_ORG=${{ secrets.PROJECT_GITHUB_ORG }},
+                GITHUB_REPO=soc_automation
+              }" \
+              --no-cli-pager
+          else
+            echo "Updating existing Lambda function: $FUNCTION_NAME"
+            aws lambda update-function-code \
+              --function-name "$FUNCTION_NAME" \
+              --zip-file fileb://portal_api.zip \
+              --no-cli-pager
+
+            aws lambda wait function-updated \
+              --function-name "$FUNCTION_NAME" \
+              --no-cli-pager
+
+            aws lambda update-function-configuration \
+              --function-name "$FUNCTION_NAME" \
+              --environment "Variables={
+                S3_BUCKET=${{ secrets.S3_BUCKET }},
+                PROJECT_GITHUB_TOKEN=${{ secrets.PROJECT_GITHUB_TOKEN }},
+                PROJECT_GITHUB_ORG=${{ secrets.PROJECT_GITHUB_ORG }},
+                GITHUB_REPO=soc_automation
+              }" \
+              --no-cli-pager
+          fi
+
+          aws lambda wait function-updated \
+            --function-name "$FUNCTION_NAME" \
+            --no-cli-pager
+          echo "Lambda ready: $FUNCTION_NAME"
+
+      - name: Wire Lambda to existing API Gateway
+        id: wire_api
+        run: |
+          set -euo pipefail
+          FUNCTION_NAME="${{ env.FUNCTION_NAME }}"
+          REGION="${{ env.AWS_REGION }}"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --no-cli-pager)
+          LAMBDA_ARN="arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${FUNCTION_NAME}"
+
+          # Find the existing HTTP API (v2)
+          API_ID=$(aws apigatewayv2 list-apis \
+            --query "Items[?contains(Name, 'attest')].ApiId | [0]" \
+            --output text --no-cli-pager 2>/dev/null || echo "")
+
+          if [ -z "$API_ID" ] || [ "$API_ID" = "None" ]; then
+            echo "No existing API found — creating a new HTTP API"
+            API_ID=$(aws apigatewayv2 create-api \
+              --name "attest-portal-api" \
+              --protocol-type HTTP \
+              --cors-configuration 'AllowOrigins=["*"],AllowMethods=["GET","POST","OPTIONS"],AllowHeaders=["Content-Type"]' \
+              --query ApiId --output text --no-cli-pager)
+            echo "Created API: $API_ID"
+          else
+            echo "Using existing API: $API_ID"
+          fi
+
+          # Create Lambda integration
+          INT_ID=$(aws apigatewayv2 create-integration \
+            --api-id "$API_ID" \
+            --integration-type AWS_PROXY \
+            --integration-uri "$LAMBDA_ARN" \
+            --payload-format-version "2.0" \
+            --query IntegrationId --output text --no-cli-pager)
+          echo "Integration: $INT_ID"
+
+          # Create /portal/{proxy+} route
+          ROUTE_KEY="ANY /portal/{proxy+}"
+          EXISTING_ROUTE=$(aws apigatewayv2 get-routes \
+            --api-id "$API_ID" \
+            --query "Items[?RouteKey=='$ROUTE_KEY'].RouteId | [0]" \
+            --output text --no-cli-pager 2>/dev/null || echo "")
+
+          if [ -z "$EXISTING_ROUTE" ] || [ "$EXISTING_ROUTE" = "None" ]; then
+            aws apigatewayv2 create-route \
+              --api-id "$API_ID" \
+              --route-key "$ROUTE_KEY" \
+              --target "integrations/${INT_ID}" \
+              --no-cli-pager
+            echo "Route created: $ROUTE_KEY"
+          else
+            echo "Route already exists: $ROUTE_KEY ($EXISTING_ROUTE)"
+          fi
+
+          # Grant API Gateway permission to invoke Lambda
+          aws lambda add-permission \
+            --function-name "$FUNCTION_NAME" \
+            --statement-id "apigateway-portal-$(date +%s)" \
+            --action lambda:InvokeFunction \
+            --principal apigateway.amazonaws.com \
+            --source-arn "arn:aws:execute-api:${REGION}:${ACCOUNT_ID}:${API_ID}/*/*/portal/*" \
+            --no-cli-pager 2>/dev/null || echo "Permission may already exist"
+
+          # Deploy to $default stage
+          STAGE=$(aws apigatewayv2 get-stages \
+            --api-id "$API_ID" \
+            --query "Items[?StageName=='\$default'].StageName | [0]" \
+            --output text --no-cli-pager 2>/dev/null || echo "")
+
+          if [ -z "$STAGE" ] || [ "$STAGE" = "None" ]; then
+            aws apigatewayv2 create-stage \
+              --api-id "$API_ID" \
+              --stage-name '$default' \
+              --auto-deploy \
+              --no-cli-pager
+            echo "Stage created"
+          fi
+
+          API_URL="https://${API_ID}.execute-api.${REGION}.amazonaws.com"
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+          echo "api_id=$API_ID"  >> "$GITHUB_OUTPUT"
+          echo ""
+          echo "======================================================"
+          echo " PORTAL_API_URL = $API_URL"
+          echo " Test: curl ${API_URL}/portal/status?emp_id=test"
+          echo "======================================================"
+
+      - name: Update GitHub Secret hint
+        run: |
+          echo ""
+          echo "Add this to your GitHub Secrets as PORTAL_API_URL:"
+          echo "${{ steps.wire_api.outputs.api_url }}"
+          echo ""
+          echo "The portal will automatically use this URL — no local credentials needed."
+
+      - name: Smoke test
+        run: |
+          API_URL="${{ steps.wire_api.outputs.api_url }}"
+          sleep 3
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/portal/status?emp_id=SMOKE-TEST")
+          echo "Smoke test status: $STATUS"
+          if [ "$STATUS" != "200" ] && [ "$STATUS" != "404" ]; then
+            echo "Unexpected status code: $STATUS"
+            exit 1
+          fi
+          echo "Portal API is live at: $API_URL/portal/"

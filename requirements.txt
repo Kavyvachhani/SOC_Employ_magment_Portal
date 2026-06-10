@@ -1,0 +1,5 @@
+streamlit==1.36.0
+boto3==1.34.131
+fpdf2==2.8.2
+python-dotenv==1.0.1
+qrcode[pil]==7.4.2

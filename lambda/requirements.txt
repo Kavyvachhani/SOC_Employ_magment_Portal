@@ -1,0 +1,6 @@
+anthropic==0.40.0
+pypdf==5.1.0
+fpdf2==2.8.2
+pyyaml==6.0.2
+python-dateutil==2.9.0
+qrcode[pil]==7.4.2

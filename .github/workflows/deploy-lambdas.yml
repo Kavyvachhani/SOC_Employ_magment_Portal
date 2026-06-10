@@ -1,0 +1,97 @@
+name: Deploy Lambda Functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lambda/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION:   ${{ secrets.AWS_REGION }}
+  PROJECT_NAME: ${{ secrets.PROJECT_NAME }}
+
+jobs:
+  deploy:
+    name: Deploy ${{ matrix.function }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        function:
+          - offer_processor
+          - signed_processor
+          - approval_handler
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: lambda/requirements.txt
+
+      - name: Build Lambda deployment package
+        run: |
+          set -euo pipefail
+          FUNC="${{ matrix.function }}"
+          BUILD_DIR="build/${FUNC}"
+          mkdir -p "$BUILD_DIR"
+
+          echo "Installing dependencies into $BUILD_DIR ..."
+          pip install --quiet -r lambda/requirements.txt -t "$BUILD_DIR/"
+
+          # Copy function source and NDA template
+          cp "lambda/${FUNC}.py" "$BUILD_DIR/"
+          cp -r lambda/templates "$BUILD_DIR/"
+
+          # Zip everything at root level (Lambda requires this)
+          cd "$BUILD_DIR"
+          zip -r "../../${FUNC}.zip" . -x "*.pyc" -x "__pycache__/*"
+          cd ../..
+
+          echo "Package size: $(du -sh ${FUNC}.zip | cut -f1)"
+
+      - name: Deploy to AWS Lambda
+        run: |
+          set -euo pipefail
+          FUNC="${{ matrix.function }}"
+          # Lambda functions were created by Terraform with dashes (offer-processor)
+          # Convert underscores to dashes for the function name
+          FUNC_DASHED="${FUNC//_/-}"
+          FUNCTION_NAME="${{ secrets.PROJECT_NAME }}-${FUNC_DASHED}"
+          echo "Deploying to Lambda: $FUNCTION_NAME"
+
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --zip-file "fileb://${FUNC}.zip" \
+            --no-cli-pager
+
+          aws lambda wait function-updated \
+            --function-name "$FUNCTION_NAME"
+
+          echo "Deploy complete: $FUNCTION_NAME"
+
+      - name: Verify deployment
+        run: |
+          FUNC_DASHED="${{ matrix.function }}"
+          FUNC_DASHED="${FUNC_DASHED//_/-}"
+          FUNCTION_NAME="${{ secrets.PROJECT_NAME }}-${FUNC_DASHED}"
+          aws lambda get-function \
+            --function-name "$FUNCTION_NAME" \
+            --query 'Configuration.{State:State,LastModified:LastModified,CodeSize:CodeSize}' \
+            --output table \
+            --no-cli-pager

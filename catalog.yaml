@@ -1,0 +1,42 @@
+# Role → access bundle catalog
+# experience_level: "fresher"     → read-only bundles
+# experience_level: "experienced" → developer bundles
+
+roles:
+  fresher:
+    label: "Junior Employee (0-2 yrs)"
+    description: "Read-only access to core services and documentation repositories."
+    access_bundles:
+      - id: s3-read-only
+        name: "S3 Read-Only"
+        policy_arn: "arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess"
+        description: "Read objects from approved S3 buckets."
+      - id: codecommit-read
+        name: "CodeCommit Read-Only"
+        policy_arn: "arn:aws:iam::aws:policy/AWSCodeCommitReadOnly"
+        description: "Clone and read code repositories."
+      - id: cloudwatch-read
+        name: "CloudWatch Read-Only"
+        policy_arn: "arn:aws:iam::aws:policy/CloudWatchReadOnlyAccess"
+        description: "View metrics and logs (no edits)."
+
+  experienced:
+    label: "Experienced Developer (2+ yrs)"
+    description: "Full developer access including write permissions to shared services."
+    access_bundles:
+      - id: developer-poweruser
+        name: "Developer Power User"
+        policy_arn: "arn:aws:iam::aws:policy/PowerUserAccess"
+        description: "Broad developer access excluding IAM management."
+      - id: codecommit-power
+        name: "CodeCommit Power User"
+        policy_arn: "arn:aws:iam::aws:policy/AWSCodeCommitPowerUser"
+        description: "Push and manage code repositories."
+      - id: ecr-power
+        name: "ECR Power User"
+        policy_arn: "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
+        description: "Push and pull container images."
+      - id: s3-developer
+        name: "S3 Developer Access"
+        policy_arn: "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+        description: "Full S3 access for designated project buckets."
