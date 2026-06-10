@@ -1,0 +1,57 @@
+# ─── terraform.tfvars.example ──────────────────────────────────────────────
+# Copy this to terraform.tfvars and fill in your values.
+# Do NOT commit terraform.tfvars — it contains secrets.
+#
+# Usage:
+#   cp terraform.tfvars.example terraform.tfvars
+#   # Edit terraform.tfvars with your values
+#   terraform init
+#   terraform plan
+#   terraform apply
+# ───────────────────────────────────────────────────────────────────────────
+
+# ─── Required ──────────────────────────────────────────────────────────────
+
+# AWS region
+aws_region = "us-east-1"
+
+# Globally unique S3 bucket name (must be unique across ALL of AWS)
+evidence_bucket_name = "attest-vault-CHANGE-ME-2026"
+
+# GitHub org/username and repo for OIDC trust
+github_org  = "your-github-username"
+github_repo = "attest"
+
+# ─── OIDC Provider ────────────────────────────────────────────────────────
+# Set to false if you already have a GitHub OIDC provider in this account
+# (e.g. from another project). If false, provide the existing ARN.
+
+# create_oidc_provider      = false
+# existing_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+
+# ─── Secrets ───────────────────────────────────────────────────────────────
+# Alternatively, set these via environment variables:
+#   export TF_VAR_anthropic_api_key="sk-ant-..."
+#   export TF_VAR_github_token="ghp_..."
+
+# anthropic_api_key = "sk-ant-..."
+# github_token      = "ghp_..."
+
+# ─── Feature Flags (all default to false) ──────────────────────────────────
+
+# Enable real IAM user creation under attest-managed/* path
+# enable_real_provisioning = true
+
+# Enable scoped provisioning policy for GitHub Actions role
+# enable_provisioning = true
+
+# Enable S3 Object Lock (GOVERNANCE mode, 365-day retention)
+# enable_worm = true
+
+# Enable SES for email-based tech lead approval
+# enable_ses       = true
+# ses_sender_email = "noreply@your-domain.com"
+# tech_lead_email  = "lead@your-domain.com"
+
+# Portal URL (for approval email links)
+# portal_url = "https://attest.your-domain.com"
