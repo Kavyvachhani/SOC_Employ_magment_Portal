@@ -786,12 +786,83 @@ def step_done() -> None:
     try:
         ev_data = _api("GET", f"/portal/evidence?emp_id={emp_id}")
         urls    = ev_data.get("download_urls", {})
+        
+        # NEW: Render AWS Credentials as a beautiful inline card instead of a raw CSV
+        if "aws-access-credentials.csv" in urls:
+            try:
+                import urllib.request
+                import csv
+                req = urllib.request.Request(urls["aws-access-credentials.csv"])
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    csv_text = resp.read().decode('utf-8').strip()
+                    lines = csv_text.split('\n')
+                    if len(lines) >= 2:
+                        reader = csv.reader(lines)
+                        header = next(reader)
+                        row = next(reader)
+                        creds = dict(zip(header, row))
+                        
+                        st.markdown(
+                            '<div style="background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.1);'
+                            'border-radius:12px;padding:24px;margin-bottom:24px;box-shadow:0 10px 15px -3px rgba(0,0,0,0.3);">'
+                            '<div style="color:#f8fafc;font-size:1.15rem;font-weight:600;margin-bottom:18px;display:flex;align-items:center;gap:8px;">'
+                            '<span style="font-size:1.3rem;">🔐</span> Provisioned Access Credentials</div>'
+                            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">'
+                            
+                            f'<div style="background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">'
+                            f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">IAM Username</div>'
+                            f'<code style="color:#e2e8f0;font-size:0.95rem;background:transparent;padding:0;">{creds.get("username", "—")}</code></div>'
+                            
+                            f'<div style="background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">'
+                            f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">Zoho Email</div>'
+                            f'<code style="color:#e2e8f0;font-size:0.95rem;background:transparent;padding:0;">{creds.get("zoho_email", "—")}</code></div>'
+                            
+                            f'<div style="background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">'
+                            f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">Access Key ID</div>'
+                            f'<code style="color:#fbbf24;font-size:0.95rem;background:transparent;padding:0;">{creds.get("access_key_id", "—")}</code></div>'
+                            
+                            f'<div style="background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">'
+                            f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">Secret Access Key</div>'
+                            f'<code style="color:#f87171;font-size:0.95rem;background:transparent;padding:0;">{creds.get("secret_access_key", "—")}</code></div>'
+                            
+                            f'<div style="background:rgba(16,185,129,0.05);padding:14px;border-radius:8px;border:1px solid rgba(16,185,129,0.2);grid-column:1 / span 2;">'
+                            f'<div style="color:#10b981;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:600;">Initial Password (Requires Reset on Login)</div>'
+                            f'<code style="color:#10b981;font-size:1.1rem;background:transparent;padding:0;">{creds.get("temp_password", "—")}</code></div>'
+                            
+                            '</div></div>',
+                            unsafe_allow_html=True
+                        )
+            except Exception as e:
+                pass # Silent fallback
+
+        st.markdown("#### 📜 Master Audit Report")
+        st.info("Compile all cryptographic evidence, verification photos, and access logs into a single verifiable SOC 2 PDF.")
+        
+        try:
+            from portal.audit_report import generate_audit_pdf
+            pdf_bytes = generate_audit_pdf(evidence, urls)
+            
+            st.download_button(
+                label="⬇️ Download Master Audit Report",
+                data=pdf_bytes,
+                file_name=f"{emp_id}_audit_report.pdf",
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True
+            )
+        except Exception as e:
+            st.error(f"Failed to generate Master Audit Report: {e}")
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("#### Raw Evidence Files")
+
+        urls    = ev_data.get("download_urls", {})
         labels  = {
             "offer-letter.pdf":"Offer Letter", "employee.json":"Employee Data",
             "signed-nda.pdf":"Signed NDA", "signed-security.pdf":"Security Policy",
             "signed-handbook.pdf":"Employee Handbook", "signed-acceptable_use.pdf":"Acceptable Use Policy",
             "nda-audit-trail.json":"Audit Trail", "photo.jpg":"Verification Photo",
-            "access-granted.csv":"Access Grants", "aws-access-credentials.csv":"AWS Credentials",
+            "access-granted.csv":"Access Grants",
             "onboarding-report.pdf":"Onboarding Report", "evidence-index.json":"Evidence Index",
         }
         cols = st.columns(3); found = 0
