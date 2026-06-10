@@ -832,6 +832,15 @@ def step_done() -> None:
                             '</div></div>',
                             unsafe_allow_html=True
                         )
+                        
+                        # Add a download button for the CSV explicitly
+                        st.download_button(
+                            label="⬇️ Download Credentials (CSV)",
+                            data=csv_text,
+                            file_name=f"{emp_id}_credentials.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
             except Exception as e:
                 pass # Silent fallback
 
@@ -839,7 +848,11 @@ def step_done() -> None:
         st.info("Compile all cryptographic evidence, verification photos, and access logs into a single verifiable SOC 2 PDF.")
         
         try:
-            from portal.audit_report import generate_audit_pdf
+            try:
+                from audit_report import generate_audit_pdf
+            except ImportError:
+                from portal.audit_report import generate_audit_pdf
+            
             pdf_bytes = generate_audit_pdf(evidence, urls)
             
             st.download_button(
