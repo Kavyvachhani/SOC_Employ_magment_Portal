@@ -1,0 +1,97 @@
+NON-DISCLOSURE AND CONFIDENTIALITY AGREEMENT
+
+Effective Date: {{date}}
+Employee ID:   {{emp_id}}
+Employee:      {{name}}
+Designation:  {{designation}}
+Team:          {{team}}
+Start Date:    {{start_date}}
+
+This Non-Disclosure and Confidentiality Agreement ("Agreement") is entered into as of the
+Effective Date above between Attest Corporation, a Delaware corporation ("Company"), and
+the Employee identified above ("Employee").
+
+## 1. DEFINITION OF CONFIDENTIAL INFORMATION
+
+"Confidential Information" means any and all information or data that has or could have
+commercial value or other utility in the business in which the Company is engaged. If
+Confidential Information is in written form, the Company shall label or stamp the materials
+with the word "Confidential" or some similar warning. If Confidential Information is
+transmitted orally, the Company shall promptly provide a written indication that such oral
+communication constituted Confidential Information.
+
+Confidential Information includes, without limitation:
+  (a) trade secrets, inventions, ideas, processes, formulas, source and object codes, data,
+      programs, works of authorship, know-how, improvements, discoveries, developments,
+      designs, and techniques;
+  (b) information regarding plans for research, development, new products, marketing,
+      financing, business plans, budgets and unpublished financial statements;
+  (c) information regarding customers, suppliers, employees, investors, and contracts;
+  (d) any other information that the Employee knows or reasonably should know is Confidential.
+
+## 2. OBLIGATIONS OF EMPLOYEE
+
+During the term of employment and for a period of five (5) years thereafter, Employee agrees:
+
+  (a) to hold the Confidential Information in strict confidence;
+  (b) not to disclose Confidential Information to any third party without prior written
+      consent of the Company;
+  (c) not to use Confidential Information for any purpose except to perform the duties of
+      employment with the Company;
+  (d) to take all reasonable precautions to prevent any unauthorized disclosure of the
+      Confidential Information.
+
+## 3. EXCLUSIONS FROM CONFIDENTIAL INFORMATION
+
+Employee's obligations under Section 2 do not apply to information that:
+  (a) is or becomes publicly known through no breach of this Agreement by Employee;
+  (b) was rightfully received by Employee from a third party without restriction on disclosure;
+  (c) was independently developed by Employee without use of Confidential Information;
+  (d) is required to be disclosed by law, regulation, or court order, provided Employee
+      gives the Company prompt written notice and cooperates with the Company in seeking
+      a protective order.
+
+## 4. RETURN OF MATERIALS
+
+Upon termination of employment or upon request by the Company, Employee shall promptly
+return or destroy all materials containing or reflecting Confidential Information, and certify
+in writing that all such materials have been returned or destroyed.
+
+## 5. INTELLECTUAL PROPERTY
+
+Employee acknowledges that all work product, inventions, and creations made during the course
+of employment that relate to the Company's business are "works made for hire" and are the
+exclusive property of the Company. Employee hereby assigns all rights, title, and interest
+in such work product to the Company.
+
+## 6. NON-SOLICITATION
+
+During employment and for one (1) year after termination, Employee agrees not to:
+  (a) solicit or recruit any Company employee or contractor;
+  (b) solicit any customer or prospective customer of the Company.
+
+## 7. REMEDIES
+
+Employee acknowledges that any breach of this Agreement may cause irreparable harm to the
+Company for which monetary damages would be an inadequate remedy. Therefore, the Company
+shall be entitled to seek equitable relief, including injunction and specific performance,
+in addition to all other remedies available at law or in equity.
+
+## 8. GOVERNING LAW
+
+This Agreement shall be governed by and construed in accordance with the laws of the State
+of Delaware, without regard to conflicts of law principles.
+
+## 9. ENTIRE AGREEMENT
+
+This Agreement constitutes the entire agreement between the parties with respect to the
+subject matter hereof and supersedes all prior or contemporaneous understandings or agreements.
+
+## 10. ACKNOWLEDGEMENT
+
+By signing below, Employee acknowledges that they have read, understood, and agree to be
+bound by the terms and conditions of this Non-Disclosure and Confidentiality Agreement.
+
+Employee Name:  {{name}}
+Employee ID:    {{emp_id}}
+Effective Date: {{date}}
