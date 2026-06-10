@@ -115,7 +115,7 @@ def generate_audit_pdf(evidence_index: dict, urls: dict) -> bytes:
     ]:
         if key in urls:
             docs_found = True
-            pdf.cell(0, 8, f" [ ✓ ] {label}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 8, f" [ YES ] {label}", new_x="LMARGIN", new_y="NEXT")
             
     if not docs_found:
         pdf.set_font("Helvetica", "I", 12)
