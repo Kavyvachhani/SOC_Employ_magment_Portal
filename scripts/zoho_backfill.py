@@ -124,9 +124,12 @@ def main() -> None:
     for e in employees:
         try:
             resp = insert_record(env, token, e)
-            status = "OK" if "success" in resp.lower() else f"RESPONSE: {resp[:160]}"
-            print(f"  {e['emp_id']} ({e.get('name')}): {status}")
-            ok += 1
+            if '"errors"' in resp or "Error occurred" in resp:
+                print(f"  {e['emp_id']} ({e.get('name')}): FAILED — {resp[:160]}")
+                fail += 1
+            else:
+                print(f"  {e['emp_id']} ({e.get('name')}): OK")
+                ok += 1
         except Exception as exc:
             print(f"  {e['emp_id']} ({e.get('name')}): FAILED — {exc}")
             fail += 1
