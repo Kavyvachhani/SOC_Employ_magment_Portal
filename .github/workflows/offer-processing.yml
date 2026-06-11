@@ -13,6 +13,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Live bucket created by Terraform (matches the Lambdas' S3_BUCKET env var).
+  S3_BUCKET: attest-vault-669167971016
+
 jobs:
   process-offer:
     name: Process Offer Letter
@@ -39,8 +43,9 @@ jobs:
         id: invoke_lambda
         run: |
           set -euo pipefail
-          FUNCTION_NAME="${{ secrets.PROJECT_NAME }}-offer-processor"
-          BUCKET="${{ secrets.S3_BUCKET }}"
+          # Terraform created the Lambdas with the "attest" prefix.
+          FUNCTION_NAME="attest-offer-processor"
+          BUCKET="${{ env.S3_BUCKET }}"
           EMP_ID="${{ env.EMP_ID }}"
 
           echo "EMP_ID: $EMP_ID"
@@ -96,7 +101,7 @@ jobs:
 
           mkdir -p "data/employees/${{ env.EMP_ID }}"
           aws s3 cp \
-            "s3://${{ secrets.S3_BUCKET }}/employees/${{ env.EMP_ID }}/offer-letter.pdf" \
+            "s3://${{ env.S3_BUCKET }}/employees/${{ env.EMP_ID }}/offer-letter.pdf" \
             "data/employees/${{ env.EMP_ID }}/offer-letter.pdf"
 
           python3 - << 'PYEOF'
@@ -115,13 +120,13 @@ jobs:
 
           aws s3 sync \
             "data/employees/${{ env.EMP_ID }}/" \
-            "s3://${{ secrets.S3_BUCKET }}/employees/${{ env.EMP_ID }}/"
+            "s3://${{ env.S3_BUCKET }}/employees/${{ env.EMP_ID }}/"
 
       # ── Step 3: Verify outputs landed in S3 ───────────────────────────────
       - name: Verify S3 outputs
         run: |
           set -euo pipefail
-          BUCKET="${{ secrets.S3_BUCKET }}"
+          BUCKET="${{ env.S3_BUCKET }}"
           PREFIX="employees/${{ env.EMP_ID }}"
 
           echo "Checking outputs for ${{ env.EMP_ID }} ..."

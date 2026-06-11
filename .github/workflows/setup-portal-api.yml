@@ -17,9 +17,11 @@ permissions:
 
 env:
   AWS_REGION:    ${{ secrets.AWS_REGION }}
-  S3_BUCKET:     ${{ secrets.S3_BUCKET }}
-  PROJECT_NAME:  ${{ secrets.PROJECT_NAME }}
-  FUNCTION_NAME: ${{ secrets.PROJECT_NAME }}-portal-api
+  # Live bucket created by Terraform (matches the Lambdas' S3_BUCKET env var).
+  S3_BUCKET:     attest-vault-669167971016
+  # Terraform created all resources with the "attest" prefix (see terraform/terraform.tfvars).
+  PROJECT_NAME:  attest
+  FUNCTION_NAME: attest-portal-api
 
 jobs:
   deploy-portal-api:
@@ -99,7 +101,7 @@ jobs:
               --timeout 30 \
               --memory-size 256 \
               --environment "Variables={
-                S3_BUCKET=${{ secrets.S3_BUCKET }},
+                S3_BUCKET=${{ env.S3_BUCKET }},
                 PROJECT_GITHUB_TOKEN=${{ secrets.PROJECT_GITHUB_TOKEN }},
                 PROJECT_GITHUB_ORG=${{ secrets.PROJECT_GITHUB_ORG }},
                 GITHUB_REPO=soc_automation
@@ -119,7 +121,7 @@ jobs:
             aws lambda update-function-configuration \
               --function-name "$FUNCTION_NAME" \
               --environment "Variables={
-                S3_BUCKET=${{ secrets.S3_BUCKET }},
+                S3_BUCKET=${{ env.S3_BUCKET }},
                 PROJECT_GITHUB_TOKEN=${{ secrets.PROJECT_GITHUB_TOKEN }},
                 PROJECT_GITHUB_ORG=${{ secrets.PROJECT_GITHUB_ORG }},
                 GITHUB_REPO=soc_automation

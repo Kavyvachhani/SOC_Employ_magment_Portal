@@ -5,14 +5,16 @@ on:
     branches: [main]
     paths:
       - "lambda/**"
+      - ".github/workflows/deploy-lambdas.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 env:
-  AWS_REGION:   ${{ secrets.AWS_REGION }}
-  PROJECT_NAME: ${{ secrets.PROJECT_NAME }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  # Terraform created all resources with the "attest" prefix (see terraform/terraform.tfvars).
+  PROJECT_NAME: attest
 
 jobs:
   deploy:
@@ -72,7 +74,7 @@ jobs:
           # Lambda functions were created by Terraform with dashes (offer-processor)
           # Convert underscores to dashes for the function name
           FUNC_DASHED="${FUNC//_/-}"
-          FUNCTION_NAME="${{ secrets.PROJECT_NAME }}-${FUNC_DASHED}"
+          FUNCTION_NAME="${PROJECT_NAME}-${FUNC_DASHED}"
           echo "Deploying to Lambda: $FUNCTION_NAME"
 
           aws lambda update-function-code \
@@ -89,7 +91,7 @@ jobs:
         run: |
           FUNC_DASHED="${{ matrix.function }}"
           FUNC_DASHED="${FUNC_DASHED//_/-}"
-          FUNCTION_NAME="${{ secrets.PROJECT_NAME }}-${FUNC_DASHED}"
+          FUNCTION_NAME="${PROJECT_NAME}-${FUNC_DASHED}"
           aws lambda get-function \
             --function-name "$FUNCTION_NAME" \
             --query 'Configuration.{State:State,LastModified:LastModified,CodeSize:CodeSize}' \
