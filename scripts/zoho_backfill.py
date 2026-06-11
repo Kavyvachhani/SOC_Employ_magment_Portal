@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Backfill all locally onboarded employees into Zoho People.
+"""Backfill onboarded employees (and optional demo data) into Zoho People.
 
-Reads each data/employees/<EMP-ID>/employee.json, then inserts a record
-into the Zoho People employee form (same fields as the Lambda's real
-provisioning path). Safe to re-run: Zoho rejects duplicate EmployeeIDs.
+Reads each data/employees/<EMP-ID>/employee.json and inserts a record into
+the Zoho People employee form via the JSON API. Department names are
+resolved to Zoho record IDs automatically (created if missing). Records
+whose EmployeeID already exists in Zoho are skipped, so re-runs are safe.
 
 Usage:
-    python3 scripts/zoho_backfill.py            # insert all
-    python3 scripts/zoho_backfill.py --dry-run  # show what would be sent
+    python3 scripts/zoho_backfill.py             # insert real employees
+    python3 scripts/zoho_backfill.py --seed      # also insert demo employees
+    python3 scripts/zoho_backfill.py --dry-run   # show what would be sent
 """
 
 import json
@@ -17,6 +19,15 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+DEMO_EMPLOYEES = [
+    {"emp_id": "EMP-DM0001", "name": "Arjun Mehta", "designation": "Software Engineer", "department": "Engineering"},
+    {"emp_id": "EMP-DM0002", "name": "Sneha Patel", "designation": "HR Executive", "department": "HR"},
+    {"emp_id": "EMP-DM0003", "name": "Rahul Verma", "designation": "Accountant", "department": "Finance"},
+    {"emp_id": "EMP-DM0004", "name": "Ananya Iyer", "designation": "System Administrator", "department": "IT"},
+    {"emp_id": "EMP-DM0005", "name": "Vikram Singh", "designation": "DevOps Engineer", "department": "Engineering"},
+    {"emp_id": "EMP-DM0006", "name": "Neha Gupta", "designation": "Financial Analyst", "department": "Finance"},
+]
 
 
 def load_env() -> dict:
@@ -33,7 +44,6 @@ def get_access_token(env: dict) -> str:
     dom = env.get("ZOHO_DOMAIN", "in")
     url = f"https://accounts.zoho.{dom}/oauth/v2/token"
     token = env["ZOHO_REFRESH_TOKEN"]
-
     for grant, key in (("refresh_token", "refresh_token"),
                        ("authorization_code", "code")):
         data = urllib.parse.urlencode({
@@ -42,69 +52,120 @@ def get_access_token(env: dict) -> str:
             "grant_type": grant,
             key: token,
         }).encode()
-        req = urllib.request.Request(url, data=data, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
+            with urllib.request.urlopen(
+                    urllib.request.Request(url, data=data, method="POST"),
+                    timeout=15) as r:
                 res = json.loads(r.read().decode())
         except Exception as e:
             res = {"error": str(e)}
         if "access_token" in res:
-            # A grant-code exchange returns the permanent refresh token:
-            # persist it so future runs work without a new code.
             if res.get("refresh_token") and res["refresh_token"] != token:
                 txt = (ROOT / ".env").read_text()
                 txt = txt.replace(f"ZOHO_REFRESH_TOKEN={token}",
                                   f"ZOHO_REFRESH_TOKEN={res['refresh_token']}")
                 (ROOT / ".env").write_text(txt)
                 print("[auth] permanent refresh token saved to .env")
-            print(f"[auth] access token obtained via {grant} grant")
             return res["access_token"]
     sys.exit("ERROR: could not get access token — generate a fresh grant "
              "code at https://api-console.zoho.in and update "
              "ZOHO_REFRESH_TOKEN in .env")
 
 
-def insert_record(env: dict, token: str, emp: dict) -> str:
-    dom = env.get("ZOHO_DOMAIN", "in")
+def api(dom: str, token: str, form: str, op: str, params: dict | None = None,
+        post: dict | None = None) -> dict:
+    url = f"https://people.zoho.{dom}/people/api/forms/{form}/{op}"
+    if op == "getRecords":
+        url = f"https://people.zoho.{dom}/people/api/forms/{form}/getRecords"
+        url += "?" + urllib.parse.urlencode(params or {"sIndex": 1, "limit": 200})
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Zoho-oauthtoken {token}"})
+    else:
+        url = f"https://people.zoho.{dom}/people/api/forms/json/{form}/{op}"
+        req = urllib.request.Request(
+            url, data=urllib.parse.urlencode(post or {}).encode(),
+            headers={"Authorization": f"Zoho-oauthtoken {token}"},
+            method="POST")
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode())
+
+
+def flatten_records(body: dict) -> list:
+    records = []
+    for item in body.get("response", {}).get("result", []):
+        for rec_id, fields in item.items():
+            if isinstance(fields, list) and fields:
+                fields[0]["_record_id"] = rec_id
+                records.append(fields[0])
+    return records
+
+
+def get_departments(dom: str, token: str) -> dict:
+    body = api(dom, token, "department", "getRecords")
+    return {r["Department"]: r["_record_id"] for r in flatten_records(body)
+            if r.get("Department")}
+
+
+def ensure_department(dom: str, token: str, depts: dict, name: str) -> str:
+    if name in depts:
+        return depts[name]
+    res = api(dom, token, "department", "insertRecord",
+              post={"inputData": json.dumps({"Department": name})})
+    pk = res.get("response", {}).get("result", {}).get("pkId")
+    if not pk:
+        sys.exit(f"ERROR: could not create department {name}: {res}")
+    print(f"[dept] created department '{name}'")
+    depts[name] = pk
+    return pk
+
+
+def guess_department(designation: str) -> str:
+    d = designation.lower()
+    if any(w in d for w in ("engineer", "developer", "devops")):
+        return "Engineering"
+    if any(w in d for w in ("hr", "people", "recruit")):
+        return "HR"
+    if any(w in d for w in ("account", "financ")):
+        return "Finance"
+    return "IT"
+
+
+def insert_employee(dom: str, token: str, depts: dict, emp: dict) -> dict:
     name = emp.get("name", "Employee").strip()
     first, _, last = name.partition(" ")
-    last = last or "Employee"
-    role = emp.get("designation") or emp.get("experience_level", "Employee")
-    dept = ("Engineering" if any(w in role.lower()
-            for w in ("engineer", "developer")) else "Product")
-    email = f"{name.replace(' ', '.').lower()}@attest-security.com"
-
-    xml = f"""
-    <Record>
-        <field name="EmployeeID">{emp['emp_id']}</field>
-        <field name="FirstName">{first}</field>
-        <field name="LastName">{last}</field>
-        <field name="EmailID">{email}</field>
-        <field name="Department">{dept}</field>
-        <field name="Designation">{role}</field>
-    </Record>
-    """
-    url = f"https://people.zoho.{dom}/people/api/forms/xml/employee/insertRecord"
-    req = urllib.request.Request(
-        url,
-        data=urllib.parse.urlencode({"xmlData": xml}).encode(),
-        headers={"Authorization": f"Zoho-oauthtoken {token}",
-                 "Content-Type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return r.read().decode()
+    last = last.strip() or "Employee"
+    designation = (emp.get("designation") or "Employee").strip()
+    # tolerate extraction noise like "of Software Engineer"
+    if designation.lower().startswith("of "):
+        designation = designation[3:]
+    dept_name = emp.get("department") or guess_department(designation)
+    record = {
+        "EmployeeID": emp["emp_id"],
+        "FirstName": first,
+        "LastName": last,
+        "EmailID": f"{name.replace(' ', '.').lower()}@attest-security.com",
+        "Department": ensure_department(dom, token, depts, dept_name),
+        "Designation": designation,
+    }
+    res = api(dom, token, "employee", "insertRecord",
+              post={"inputData": json.dumps(record)})
+    # Designation may be a lookup field on some orgs — retry without it
+    err = res.get("response", {}).get("errors", {})
+    if err and "Designation" in str(err.get("message", "")):
+        record.pop("Designation")
+        res = api(dom, token, "employee", "insertRecord",
+                  post={"inputData": json.dumps(record)})
+    return res
 
 
 def main() -> None:
     dry = "--dry-run" in sys.argv
+    seed = "--seed" in sys.argv
     env = load_env()
-    emp_dirs = sorted((ROOT / "data" / "employees").glob("EMP-*"))
-    if not emp_dirs:
-        sys.exit("No employee folders under data/employees/")
+    dom = env.get("ZOHO_DOMAIN", "in")
 
     employees = []
-    for d in emp_dirs:
+    for d in sorted((ROOT / "data" / "employees").glob("EMP-*")):
         f = d / "employee.json"
         if f.exists():
             emp = json.loads(f.read_text())
@@ -112,29 +173,36 @@ def main() -> None:
             employees.append(emp)
         else:
             print(f"[skip] {d.name}: no employee.json")
+    if seed:
+        employees += DEMO_EMPLOYEES
 
-    print(f"Backfilling {len(employees)} employees to Zoho People ...\n")
     if dry:
         for e in employees:
             print(f"  would insert {e['emp_id']}: {e.get('name')}")
         return
 
     token = get_access_token(env)
-    ok = fail = 0
+    depts = get_departments(dom, token)
+    existing = {str(r.get("EmployeeID")) for r in
+                flatten_records(api(dom, token, "employee", "getRecords"))}
+
+    ok = fail = skipped = 0
     for e in employees:
-        try:
-            resp = insert_record(env, token, e)
-            if '"errors"' in resp or "Error occurred" in resp:
-                print(f"  {e['emp_id']} ({e.get('name')}): FAILED — {resp[:160]}")
-                fail += 1
-            else:
-                print(f"  {e['emp_id']} ({e.get('name')}): OK")
-                ok += 1
-        except Exception as exc:
-            print(f"  {e['emp_id']} ({e.get('name')}): FAILED — {exc}")
+        if e["emp_id"] in existing:
+            print(f"  {e['emp_id']} ({e.get('name')}): already in Zoho — skipped")
+            skipped += 1
+            continue
+        res = insert_employee(dom, token, depts, e)
+        status = res.get("response", {})
+        if status.get("status") == 0:
+            print(f"  {e['emp_id']} ({e.get('name')}): OK")
+            ok += 1
+        else:
+            print(f"  {e['emp_id']} ({e.get('name')}): FAILED — "
+                  f"{json.dumps(status.get('errors', status))[:150]}")
             fail += 1
 
-    print(f"\nDone: {ok} inserted, {fail} failed.")
+    print(f"\nDone: {ok} inserted, {skipped} skipped (already present), {fail} failed.")
     print("Verify with: python3 scripts/check_zoho.py")
 
 
