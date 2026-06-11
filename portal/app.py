@@ -32,6 +32,10 @@ except ImportError:
 PORTAL_API_URL = os.getenv("PORTAL_API_URL", "").rstrip("/")
 POLICIES_DIR   = Path(os.getenv("POLICIES_DIR", str(Path(__file__).parent.parent / "policies")))
 
+def now_utc() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
 @st.cache_data(ttl=300)
 def verify_zoho_connection(client_id, client_secret, refresh_token, domain):
     if not (client_id and client_secret and refresh_token):
