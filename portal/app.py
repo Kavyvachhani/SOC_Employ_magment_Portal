@@ -32,6 +32,48 @@ except ImportError:
 PORTAL_API_URL = os.getenv("PORTAL_API_URL", "").rstrip("/")
 POLICIES_DIR   = Path(os.getenv("POLICIES_DIR", str(Path(__file__).parent.parent / "policies")))
 
+@st.cache_data(ttl=300)
+def verify_zoho_connection(client_id, client_secret, refresh_token, domain):
+    if not (client_id and client_secret and refresh_token):
+        return False, "Missing credentials"
+    url = f"https://accounts.zoho.{domain}/oauth/v2/token"
+    
+    # Try 1: Refresh Token Flow (Standard path)
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token"
+    }
+    try:
+        import requests
+        res = requests.post(url, data=data, timeout=5)
+        if res.status_code == 200:
+            res_data = res.json()
+            if "access_token" in res_data:
+                return True, "Connected"
+    except Exception:
+        pass
+        
+    # Try 2: Authorization Code Flow (One-time fallback)
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": refresh_token,
+        "grant_type": "authorization_code"
+    }
+    try:
+        import requests
+        res = requests.post(url, data=data, timeout=5)
+        if res.status_code == 200:
+            res_data = res.json()
+            if "access_token" in res_data:
+                return True, "Connected"
+            return False, f"Auth Error: {res_data.get('error', 'unknown')}"
+        return False, f"HTTP Error {res.status_code}"
+    except Exception as e:
+        return False, f"Connection Failed: {e}"
+
 # ─── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Attest — SOC 2 Onboarding",
@@ -251,137 +293,153 @@ def load_policy_text(policy: dict, nda_text: str | None = None) -> str:
 
 _CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-html, body, [class*="css"] { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+html, body, [class*="css"] { font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif !important; }
 
 /* Hide Streamlit default UI elements */
 header[data-testid="stHeader"], footer, #MainMenu, [data-testid="stToolbar"], [data-testid="stDecoration"], [data-testid="stStatusWidget"] { 
     display: none !important; 
 }
 
-/* Premium Dark Mode Background */
+/* Premium Dark Mode Background & Radial Glows */
 [data-testid="stAppViewContainer"], [data-testid="stMain"], .main .block-container { 
-    background-color: #0B0F1A !important; 
-    color: #F3F4F6 !important; 
+    background-color: #060913 !important; 
+    color: #E2E8F0 !important; 
+}
+[data-testid="stAppViewContainer"]::before {
+    content: ''; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: 
+        radial-gradient(circle at 80% 20%, rgba(99, 102, 241, 0.12) 0%, transparent 50%),
+        radial-gradient(circle at 10% 80%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+        radial-gradient(#1e293b 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 28px 28px;
+    z-index: -1; opacity: 0.8;
+}
+
+.block-container { padding-top: 3.5rem !important; padding-bottom: 5rem !important; max-width: 1120px !important; }
+
+/* Clean Glassmorphic Sidebar */
+[data-testid="stSidebar"] {
+    background: #03060E !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+[data-testid="stSidebar"] * { color: #CBD5E1 !important; }
+
+/* Typography */
+h1, h2, h3, h4, h5 { 
+    color: #F8FAFC !important; 
+    font-weight: 700 !important; 
+    letter-spacing: -0.025em !important; 
+}
+h1 { font-size: 2.3rem !important; margin-bottom: 0.6rem !important; background: linear-gradient(135deg, #FFFFFF 30%, #A5B4FC 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+p, .stMarkdown p { color: #94A3B8 !important; line-height: 1.65 !important; font-size: 0.98rem !important; }
+strong { color: #F1F5F9 !important; font-weight: 600 !important; }
+
+/* Step header */
+.step-header { display: flex; align-items: center; gap: 18px; margin-bottom: 2rem; padding-bottom: 1.4rem; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.step-num { display: flex; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: 50%; background: linear-gradient(135deg, #6366F1, #4F46E5); font-weight: 700; font-size: 18px; color: #fff; flex-shrink: 0; box-shadow: 0 0 15px rgba(99, 102, 241, 0.4); }
+.step-title { color: #F8FAFC !important; font-size: 1.55rem; font-weight: 700; margin: 0; }
+.step-sub { color: #94A3B8; font-size: 0.95rem; margin-top: 5px; }
+
+/* Sidebar steps progress */
+.sb-step { display: flex; align-items: center; gap: 12px; padding: 11px 15px; border-radius: 8px; margin-bottom: 6px; font-size: 0.92rem; transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
+.sb-step-done { color: #10B981 !important; font-weight: 500; background: rgba(16, 185, 129, 0.04); border-left: 3px solid #10B981; }
+.sb-step-active { background: rgba(99, 102, 241, 0.08); color: #F8FAFC !important; font-weight: 600; border-left: 3px solid #6366F1; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.1); transform: translateX(2px); }
+.sb-step-todo { color: #64748B !important; }
+
+/* Glassmorphism Cards */
+[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stExpander"] {
+    background: rgba(13, 17, 33, 0.6) !important;
+    backdrop-filter: blur(16px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4) !important;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"]:hover { 
+    transform: translateY(-3px) !important; 
+    box-shadow: 0 20px 30px -10px rgba(0, 0, 0, 0.5), 0 0 20px rgba(99, 102, 241, 0.15) !important;
+    border-color: rgba(99, 102, 241, 0.3) !important;
 }
 
 /* File Uploader Fixes */
 [data-testid="stFileUploader"] { background: transparent !important; }
 [data-testid="stFileUploader"] section { 
-    background: rgba(17, 24, 39, 0.6) !important; 
-    border: 1px dashed rgba(99, 102, 241, 0.4) !important; 
+    background: rgba(10, 13, 26, 0.8) !important; 
+    border: 1.5px dashed rgba(99, 102, 241, 0.25) !important; 
     border-radius: 12px !important;
+    padding: 20px !important;
 }
 [data-testid="stFileUploader"] section:hover {
-    border-color: #6366F1 !important;
-    background: rgba(17, 24, 39, 0.8) !important;
+    border-color: rgba(99, 102, 241, 0.6) !important;
+    background: rgba(13, 17, 33, 0.9) !important;
 }
 
-/* Subtle dot pattern for texture */
-[data-testid="stAppViewContainer"]::before {
-    content: ''; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-    background-image: radial-gradient(#1F2937 1px, transparent 1px);
-    background-size: 24px 24px;
-    z-index: -1; opacity: 0.6;
-}
-
-.block-container { padding-top: 3rem !important; padding-bottom: 5rem !important; max-width: 1100px !important; }
-
-/* Clean Sidebar */
-[data-testid="stSidebar"] {
-    background: #0D1326 !important;
-    border-right: 1px solid #1F2937 !important;
-}
-[data-testid="stSidebar"] * { color: #D1D5DB !important; }
-
-/* Typography */
-h1, h2, h3, h4 { color: #F9FAFB !important; font-weight: 700 !important; letter-spacing: -0.02em !important; }
-h1 { font-size: 2.2rem !important; margin-bottom: 0.5rem !important; }
-p, .stMarkdown p { color: #9CA3AF !important; line-height: 1.6 !important; font-size: 1rem !important; }
-strong { color: #F3F4F6 !important; font-weight: 600 !important; }
-
-/* Step header */
-.step-header { display: flex; align-items: center; gap: 16px; margin-bottom: 1.8rem; padding-bottom: 1.2rem; border-bottom: 1px solid #1F2937; }
-.step-num { display: flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background: #6366F1; font-weight: 700; font-size: 18px; color: #fff; flex-shrink: 0; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4); }
-.step-title { color: #F9FAFB !important; font-size: 1.6rem; font-weight: 700; margin: 0; }
-.step-sub { color: #9CA3AF; font-size: 0.95rem; margin-top: 4px; }
-
-/* Sidebar steps */
-.sb-step { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; margin-bottom: 4px; font-size: 0.95rem; transition: all 0.2s ease; }
-.sb-step-done { color: #34D399 !important; font-weight: 500; }
-.sb-step-active { background: rgba(99, 102, 241, 0.1); color: #F3F4F6 !important; font-weight: 600; border-left: 4px solid #6366F1; transform: translateX(4px); }
-.sb-step-todo { color: #6B7280 !important; }
-
-/* Glassmorphism Cards */
-[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stMetric"], [data-testid="stExpander"] {
-    background: rgba(17, 24, 39, 0.7) !important;
-    backdrop-filter: blur(12px) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    border-radius: 12px !important;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1) !important;
-    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease !important;
-}
-[data-testid="stVerticalBlockBorderWrapper"]:hover { 
-    transform: translateY(-2px) !important; 
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2) !important;
-    border-color: rgba(99, 102, 241, 0.4) !important;
-}
-
-/* Primary Action Buttons */
+/* Buttons */
 .stButton>button {
-    background: rgba(255, 255, 255, 0.05) !important;
-    color: #F9FAFB !important; 
-    border: 1px solid rgba(255, 255, 255, 0.1) !important; 
+    background: rgba(255, 255, 255, 0.04) !important;
+    color: #E2E8F0 !important; 
+    border: 1px solid rgba(255, 255, 255, 0.08) !important; 
     border-radius: 8px !important; 
     font-weight: 500 !important; 
     font-size: 0.95rem !important; 
-    padding: 0.5rem 1.2rem !important; 
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important; 
-    transition: all 0.2s ease !important;
+    padding: 0.55rem 1.3rem !important; 
+    box-shadow: 0 4px 6px rgba(0,0,0,0.15) !important; 
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 .stButton>button:hover { 
-    background: rgba(255, 255, 255, 0.1) !important;
-    transform: translateY(-1px) !important; 
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important; 
+    background: rgba(255, 255, 255, 0.08) !important;
+    border-color: rgba(255, 255, 255, 0.15) !important;
+    transform: translateY(-1.5px) !important; 
+    box-shadow: 0 8px 12px rgba(0,0,0,0.25) !important; 
+    color: #F8FAFC !important;
 }
 
-/* Approve Button (Accent) */
+/* Primary buttons */
 .stButton>button[kind="primary"] {
-    background: #6366F1 !important;
+    background: linear-gradient(135deg, #6366F1, #4F46E5) !important;
     border-color: #6366F1 !important;
-    box-shadow: 0 2px 4px rgba(99, 102, 241, 0.3) !important;
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3) !important;
+    color: #fff !important;
 }
 .stButton>button[kind="primary"]:hover {
-    background: #4F46E5 !important;
+    background: linear-gradient(135deg, #4F46E5, #4338CA) !important;
     border-color: #4F46E5 !important;
-    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.5) !important;
+    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5) !important;
 }
 
 /* Download Buttons */
 [data-testid="stDownloadButton"]>button {
-    background: rgba(17, 24, 39, 0.8) !important;
-    border: 1px solid rgba(255, 255, 255, 0.15) !important;
-    color: #D1D5DB !important; 
+    background: rgba(13, 17, 33, 0.8) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    color: #CBD5E1 !important; 
     border-radius: 8px !important;
 }
 [data-testid="stDownloadButton"]>button:hover { 
-    background: rgba(31, 41, 55, 0.9) !important; 
-    border-color: rgba(255, 255, 255, 0.25) !important; 
-    color: #F9FAFB !important; 
+    background: rgba(24, 30, 56, 0.9) !important; 
+    border-color: rgba(255, 255, 255, 0.22) !important; 
+    color: #F8FAFC !important; 
 }
 
 /* Form inputs */
 [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea {
-    background: rgba(17, 24, 39, 0.8) !important; 
-    border: 1px solid rgba(255, 255, 255, 0.1) !important; 
+    background: rgba(9, 12, 26, 0.85) !important; 
+    border: 1px solid rgba(255, 255, 255, 0.08) !important; 
     border-radius: 8px !important; 
-    color: #F9FAFB !important; 
-    transition: all 0.2s;
+    color: #F8FAFC !important; 
+    transition: all 0.25s;
+    padding: 10px 14px !important;
 }
 [data-testid="stTextInput"] input:focus, [data-testid="stTextArea"] textarea:focus {
     border-color: #6366F1 !important; 
-    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.25) !important;
 }
+
+/* Metric styling adjustments */
+[data-testid="stMetricLabel"] { color: #94A3B8 !important; font-weight: 500 !important; font-size: 0.8rem !important; text-transform: uppercase; letter-spacing: 0.06em; }
+[data-testid="stMetricValue"] { color: #F8FAFC !important; font-weight: 700 !important; font-size: 1.7rem !important; }
+
+hr { border-color: rgba(255, 255, 255, 0.06) !important; margin: 2.2rem 0 !important; }
 </style>
 """
 
@@ -465,10 +523,31 @@ def render_sidebar() -> None:
         api_ok    = bool(PORTAL_API_URL)
         api_color = "#4ade80" if api_ok else "#f87171"
         api_label = "✓ API Connected" if api_ok else "⚠ API Not Set"
+        
+        zoho_id = os.getenv("ZOHO_CLIENT_ID")
+        zoho_secret = os.getenv("ZOHO_CLIENT_SECRET")
+        zoho_refresh = os.getenv("ZOHO_REFRESH_TOKEN")
+        zoho_domain = os.getenv("ZOHO_DOMAIN", "in")
+        zoho_ok = bool(zoho_id and zoho_secret and zoho_refresh)
+        if zoho_ok:
+            connected, reason = verify_zoho_connection(zoho_id, zoho_secret, zoho_refresh, zoho_domain)
+            if connected:
+                zoho_color = "#4ade80"
+                zoho_label = "✓ Zoho API (REAL - Connected)"
+            else:
+                zoho_color = "#f87171"
+                zoho_label = f"⚠ Zoho API (REAL - Auth Error)"
+        else:
+            zoho_color = "#60a5fa"
+            zoho_label = "ℹ Zoho API (MOCK)"
+        
         st.markdown(
-            f'<div style="background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.22);border-radius:8px;padding:10px 12px;">'
+            f'<div style="background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.22);border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
             f'<div style="color:#60a5fa;font-weight:600;font-size:.82rem;">☁️ AWS Cloud Pipeline</div>'
-            f'<div style="color:{api_color};font-size:.74rem;margin-top:2px;">{api_label}</div></div>',
+            f'<div style="color:{api_color};font-size:.74rem;margin-top:2px;">{api_label}</div></div>'
+            f'<div style="background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.22);border-radius:8px;padding:10px 12px;">'
+            f'<div style="color:#a5b4fc;font-weight:600;font-size:.82rem;">👥 Zoho HR Integration</div>'
+            f'<div style="color:{zoho_color};font-size:.74rem;margin-top:2px;">{zoho_label}</div></div>',
             unsafe_allow_html=True)
         if st.session_state.emp_id:
             st.markdown(
@@ -802,6 +881,12 @@ def step_done() -> None:
                         row = next(reader)
                         creds = dict(zip(header, row))
                         
+                        username_val = creds.get("username") or creds.get("iam_username") or "—"
+                        zoho_email_val = creds.get("zoho_email") or creds.get("company_email") or "—"
+                        access_key_val = creds.get("access_key_id") or "—"
+                        secret_key_val = creds.get("secret_access_key") or "—"
+                        temp_password_val = creds.get("temp_password") or creds.get("temporary_password") or "—"
+                        
                         st.markdown(
                             '<div style="background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.1);'
                             'border-radius:12px;padding:24px;margin-bottom:24px;box-shadow:0 10px 15px -3px rgba(0,0,0,0.3);">'
@@ -811,23 +896,23 @@ def step_done() -> None:
                             
                             f'<div style="background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">'
                             f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">IAM Username</div>'
-                            f'<code style="color:#e2e8f0;font-size:0.95rem;background:transparent;padding:0;">{creds.get("username", "—")}</code></div>'
+                            f'<code style="color:#e2e8f0;font-size:0.95rem;background:transparent;padding:0;">{username_val}</code></div>'
                             
                             f'<div style="background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">'
                             f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">Zoho Email</div>'
-                            f'<code style="color:#e2e8f0;font-size:0.95rem;background:transparent;padding:0;">{creds.get("zoho_email", "—")}</code></div>'
+                            f'<code style="color:#e2e8f0;font-size:0.95rem;background:transparent;padding:0;">{zoho_email_val}</code></div>'
                             
                             f'<div style="background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">'
                             f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">Access Key ID</div>'
-                            f'<code style="color:#fbbf24;font-size:0.95rem;background:transparent;padding:0;">{creds.get("access_key_id", "—")}</code></div>'
+                            f'<code style="color:#fbbf24;font-size:0.95rem;background:transparent;padding:0;">{access_key_val}</code></div>'
                             
                             f'<div style="background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">'
                             f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">Secret Access Key</div>'
-                            f'<code style="color:#f87171;font-size:0.95rem;background:transparent;padding:0;">{creds.get("secret_access_key", "—")}</code></div>'
+                            f'<code style="color:#f87171;font-size:0.95rem;background:transparent;padding:0;">{secret_key_val}</code></div>'
                             
                             f'<div style="background:rgba(16,185,129,0.05);padding:14px;border-radius:8px;border:1px solid rgba(16,185,129,0.2);grid-column:1 / span 2;">'
                             f'<div style="color:#10b981;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:600;">Initial Password (Requires Reset on Login)</div>'
-                            f'<code style="color:#10b981;font-size:1.1rem;background:transparent;padding:0;">{creds.get("temp_password", "—")}</code></div>'
+                            f'<code style="color:#10b981;font-size:1.1rem;background:transparent;padding:0;">{temp_password_val}</code></div>'
                             
                             '</div></div>',
                             unsafe_allow_html=True

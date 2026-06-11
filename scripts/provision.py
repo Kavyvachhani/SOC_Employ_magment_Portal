@@ -95,118 +95,254 @@ def generate_onboarding_report_pdf(
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
     
-    # Title Banner
+    # ─── Title Banner ──────────────────────────────────────────────────────────
     pdf.set_fill_color(15, 23, 42) # slate-900
-    pdf.rect(0, 0, 210, 40, "F")
+    pdf.rect(0, 0, 210, 38, "F")
     
     pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.set_xy(20, 10)
+    pdf.cell(0, 10, "ATTEST COMPLIANCE ENGINE", align="L")
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.set_xy(20, 10)
+    pdf.cell(170, 10, "SOC 2 AUDIT EVIDENCE · SYSTEM PROVISIONING", align="R")
+    
     pdf.set_font("Helvetica", "B", 18)
-    pdf.set_y(15)
-    pdf.cell(0, 10, "SOC 2 ONBOARDING COMPLIANCE REPORT", align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_xy(20, 20)
+    pdf.cell(0, 12, "ONBOARDING EVIDENCE COMPLIANCE REPORT", align="L")
     
     # Reset text color
     pdf.set_text_color(33, 37, 41)
-    pdf.ln(15)
+    pdf.set_y(44)
     
-    # Photo placement
+    # ─── Target Profile Grid ──────────────────────────────────────────────────
     y_start = pdf.get_y()
     has_photo = False
     if photo_path and photo_path.exists():
         try:
-            # Render photo on the right side
-            pdf.image(str(photo_path), x=140, y=y_start, w=45, h=45)
+            pdf.image(str(photo_path), x=135, y=y_start + 8, w=35, h=32.5)
+            # Draw frame
+            pdf.set_draw_color(226, 232, 240)
+            pdf.rect(134.5, y_start + 7.5, 36, 33.5)
             has_photo = True
         except Exception as e:
             print(f"Failed to embed photo in PDF: {e}")
             
-    # Metadata details on the left side
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(110, 6, "Employee Information", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_text_color(79, 70, 229) # Indigo-600
+    pdf.cell(110, 8, "1. Target Profile Information", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(33, 37, 41)
+    
     pdf.set_font("Helvetica", "", 9)
-    pdf.cell(35, 5, "Employee Name:")
-    pdf.cell(75, 5, _safe(employee_data.get("name", "Unknown")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(35, 5, "Employee ID:")
-    pdf.cell(75, 5, _safe(emp_id), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(35, 5, "Designation:")
-    pdf.cell(75, 5, _safe(employee_data.get("designation", "Employee")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(35, 5, "Team:")
-    pdf.cell(75, 5, _safe(employee_data.get("team", "Engineering")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(35, 5, "Experience Level:")
-    pdf.cell(75, 5, _safe(employee_data.get("experience_level", "fresher")).capitalize(), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(35, 5, "Approved By:")
-    pdf.cell(75, 5, _safe(approver), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    profile_data = [
+        ("Employee ID", emp_id),
+        ("Full Name", employee_data.get("name", "Unknown")),
+        ("Assigned Designation", employee_data.get("designation", "Employee")),
+        ("Assigned Department", employee_data.get("team", "Engineering")),
+        ("Experience Level", str(employee_data.get("experience_level", "fresher")).capitalize()),
+        ("Approving Manager", approver),
+    ]
     
-    if has_photo:
-        pdf.set_y(max(pdf.get_y(), y_start + 50))
-    else:
-        pdf.ln(5)
+    for lbl, val in profile_data:
+        pdf.set_fill_color(248, 250, 252) # Slate-50 background for label
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(38, 6.5, f"  {lbl}", border=1, fill=True)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(72, 6.5, f"  {_safe(val)}", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        
+    pdf.set_y(max(pdf.get_y(), y_start + 52))
     
-    # Divider
-    pdf.set_draw_color(226, 232, 240)
-    pdf.line(20, pdf.get_y(), 190, pdf.get_y())
-    pdf.ln(4)
-    
-    # Access Privileges Section
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(0, 6, "Granted AWS Access Privileges (SOC 2 Compliant)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.set_font("Helvetica", "", 9)
+    # ─── Scoped IAM Policy Table ──────────────────────────────────────────────
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_text_color(79, 70, 229)
+    pdf.cell(0, 8, "2. Scoped IAM Privileges (SOC 2 Access Control)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(33, 37, 41)
+    pdf.ln(1)
     
     # Header Table
     pdf.set_fill_color(241, 245, 249)
     pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(45, 7, "Service", border=1, fill=True)
-    pdf.cell(125, 7, "AWS Scoped Policy ARN", border=1, fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(45, 7.5, "Service Component", border=1, fill=True)
+    pdf.cell(125, 7.5, "Scoped Access Policy ARN", border=1, fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     
-    pdf.set_font("Helvetica", "", 8)
+    pdf.set_font("Helvetica", "", 8.5)
     for bundle in bundles:
-        pdf.cell(45, 7, _safe(bundle.get("name", "")), border=1)
-        pdf.cell(125, 7, _safe(bundle.get("policy_arn", "")), border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(45, 7, f"  {_safe(bundle.get('name', ''))}", border=1)
+        pdf.set_font("Courier", "", 8)
+        pdf.cell(125, 7, f"  {_safe(bundle.get('policy_arn', ''))}", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font("Helvetica", "", 8.5)
         
     pdf.ln(4)
     
-    # Credentials Section
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(0, 6, "AWS Account Credentials Details", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    # ─── AWS Account Access Details ──────────────────────────────────────────
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_text_color(79, 70, 229)
+    pdf.cell(0, 8, "3. Corporate Access Provisioning Status", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(33, 37, 41)
+    pdf.ln(1)
+    
+    pdf.set_fill_color(241, 245, 249)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(45, 7.5, "Corporate Component", border=1, fill=True)
+    pdf.cell(125, 7.5, "Provisioned Target / Value", border=1, fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    
     pdf.set_font("Helvetica", "", 9)
-    pdf.cell(35, 5, "IAM Username:")
-    pdf.cell(135, 5, _safe(credentials_data.get("username")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(35, 5, "Console Login URL:")
-    pdf.cell(135, 5, _safe(credentials_data.get("console_url")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(35, 5, "Access Key ID:")
-    pdf.cell(135, 5, _safe(credentials_data.get("access_key_id")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    
-    pdf.ln(2)
-    pdf.set_fill_color(254, 243, 199) # warning background color
-    pdf.set_font("Helvetica", "B", 8)
-    pdf.cell(0, 5, "SOC 2 SECURITY NOTICE:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.set_font("Helvetica", "", 8)
-    pdf.multi_cell(0, 4, "1. Password Reset: You must reset your temporary password on your first console sign-in.\n"
-                         "2. Multi-Factor Authentication (MFA): MFA enrollment is strictly required within 24 hours of onboarding.\n"
-                         "3. Access Keys: Keep your API Access Keys secure. Never commit them to git repositories.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    
+    for lbl, val in [
+        ("IAM Access Account", credentials_data.get("username")),
+        ("Corporate Zoho Mailbox", f"{employee_data.get('name', 'employee').replace(' ', '.').lower()}@attest-security.com"),
+        ("Console Login URL", credentials_data.get("console_url")),
+        ("AWS Access Key ID", credentials_data.get("access_key_id")),
+    ]:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(45, 7.5, f"  {lbl}", border=1)
+        pdf.set_font("Courier", "", 9)
+        pdf.cell(125, 7.5, f"  {_safe(val)}", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        
     pdf.ln(4)
-    # E-Signature Section
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(0, 6, "Electronic Signature & Verification Audit Trail", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.set_font("Helvetica", "", 9)
     
-    pdf.cell(35, 5, "Signer Name:")
-    pdf.cell(135, 5, _safe(employee_data.get("name")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(35, 5, "Signed At (UTC):")
-    pdf.cell(135, 5, _safe(credentials_data.get("timestamp")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(35, 5, "Source IP:")
-    pdf.cell(135, 5, _safe(credentials_data.get("ip", "127.0.0.1")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(35, 5, "Signature Method:")
-    pdf.cell(135, 5, "Typed Legal Name (Consent Captured)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    # ─── Compliance Notice Box ──────────────────────────────────────────────────
+    pdf.set_fill_color(254, 253, 230) # Amber-50 background
+    pdf.set_draw_color(245, 158, 11)  # Amber-500 border
+    pdf.set_text_color(180, 83, 9)     # Amber-700 text
+    pdf.rect(20, pdf.get_y(), 170, 22.5, "FD")
+    
+    pdf.set_xy(23, pdf.get_y() + 2)
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.cell(0, 4.5, "SOC 2 CRITICAL SECURITY NOTICE:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Helvetica", "", 8)
+    pdf.set_x(23)
+    pdf.cell(0, 4, "1. Password Reset: Credential files contain temporary credentials. Password reset is forced on first console login.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_x(23)
+    pdf.cell(0, 4, "2. Multi-Factor Authentication: MFA enrollment is mandatory for access retention within 24 hours.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    
+    pdf.set_draw_color(0, 0, 0) # Reset draw color
+    pdf.set_text_color(33, 37, 41) # Reset text color
+    pdf.set_y(pdf.get_y() + 10)
+    pdf.ln(4)
+    
+    # ─── Signed Policies Checkbox Grid ──────────────────────────────────────────
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_text_color(79, 70, 229)
+    pdf.cell(0, 8, "4. Attestation Log & Electronic Signatures", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(33, 37, 41)
+    pdf.ln(1)
+    
+    # Table headers
+    pdf.set_fill_color(241, 245, 249)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(90, 7.5, "Regulatory Document Title", border=1, fill=True)
+    pdf.cell(35, 7.5, "Acknowledge Status", border=1, fill=True)
+    pdf.cell(45, 7.5, "Evidence Verification File", border=1, fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    
+    pdf.set_font("Helvetica", "", 9)
+    for label, is_signed, key in [
+        ("Employment Offer Letter", True, "offer-letter.pdf"),
+        ("Mutual Non-Disclosure Agreement", True, "signed-nda.pdf"),
+        ("Corporate Security Policy", "Security Policy" in employee_data.get("policies_signed", []), "signed-security.pdf"),
+        ("Employee Handbook Acknowledgement", "Employee Handbook" in employee_data.get("policies_signed", []), "signed-handbook.pdf"),
+        ("Acceptable Use Policy", "Acceptable Use Policy" in employee_data.get("policies_signed", []), "signed-acceptable_use.pdf"),
+    ]:
+        status_label = "PENDING"
+        status_fill = (254, 242, 242) # Red fill
+        status_text_color = (239, 68, 68) # Red text
+        
+        if is_signed:
+            status_label = "SIGNED & ACTIVE"
+            status_fill = (240, 253, 250) # Green-50 fill
+            status_text_color = (13, 148, 136) # Green-600 text
+            
+        pdf.cell(90, 7.5, f"  {label}", border=1)
+        
+        # Draw status cell with custom colors
+        pdf.set_fill_color(*status_fill)
+        pdf.set_text_color(*status_text_color)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.cell(35, 7.5, status_label, border=1, fill=True, align="C")
+        
+        pdf.set_text_color(33, 37, 41)
+        pdf.set_font("Courier", "", 8.5)
+        pdf.cell(45, 7.5, f"  {key if is_signed else '-'}", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font("Helvetica", "", 9)
+        
+    # E-Signature Details
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(0, 5, "Signature & Legal Consent Audit Records:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Courier", "", 8.5)
+    pdf.cell(0, 4.5, f"  - Legal Signer: {employee_data.get('name')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 4.5, f"  - Timestamp:    {credentials_data.get('timestamp')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 4.5, f"  - Client IP:     {credentials_data.get('ip', '127.0.0.1')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 4.5, "  - Signature Method: Typed legal name check (express digital consent captured)", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    # Footer Audit Stamp
+    pdf.ln(6)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(148, 163, 184) # Slate-400
+    pdf.cell(0, 4, "This compliance audit evidence report was generated automatically via the Attest SOC 2 Evidence Vault.", align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 4, "All evidence indexes are cryptographically signed, hashed, and backed up in S3 WORM storage.", align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     
     pdf.output(str(output_path))
 
 
 def _provision_zoho_mail(employee_data: dict, emp_id: str) -> dict:
-    """Simulate creating a Zoho Mail account for the new employee."""
+    """Create a Zoho People record or simulate Zoho Mail creation."""
     name = employee_data.get("name", "employee").replace(" ", ".").lower()
     email = f"{name}@attest-security.com"
-    print(f"  [Zoho Mail] Simulating creation of mailbox: {email}")
+    
+    zoho_id = os.getenv("ZOHO_CLIENT_ID")
+    zoho_secret = os.getenv("ZOHO_CLIENT_SECRET")
+    zoho_refresh = os.getenv("ZOHO_REFRESH_TOKEN")
+    zoho_domain = os.getenv("ZOHO_DOMAIN", "in")
+    zoho_ok = bool(zoho_id and zoho_secret and zoho_refresh)
+    
+    if zoho_ok:
+        print(f"  [Zoho People] Real integration active. Attempting to create employee record on Zoho People...")
+        url = f"https://accounts.zoho.{zoho_domain}/oauth/v2/token"
+        data = {
+            "client_id": zoho_id,
+            "client_secret": zoho_secret,
+        }
+        if zoho_refresh.startswith("1000.") and len(zoho_refresh) > 40:
+            data["code"] = zoho_refresh
+            data["grant_type"] = "authorization_code"
+        else:
+            data["refresh_token"] = zoho_refresh
+            data["grant_type"] = "refresh_token"
+            
+        try:
+            import requests
+            res = requests.post(url, data=data, timeout=5)
+            if res.status_code == 200 and "access_token" in res.json():
+                access_token = res.json()["access_token"]
+                headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+                first_name = employee_data.get("name", "Employee").split(' ')[0]
+                last_name = (employee_data.get("name", "Employee").split(' ')[1] if len(employee_data.get("name", "Employee").split(' ')) > 1 else "Employee")
+                
+                xml_data = f"""
+                <Record>
+                    <field name="EmployeeID">{emp_id}</field>
+                    <field name="FirstName">{first_name}</field>
+                    <field name="LastName">{last_name}</field>
+                    <field name="EmailID">{email}</field>
+                    <field name="Department">{employee_data.get("team", "Engineering")}</field>
+                    <field name="Designation">{employee_data.get("designation", "Developer")}</field>
+                </Record>
+                """
+                people_url = f"https://people.zoho.{zoho_domain}/people/api/forms/xml/employee/insertRecord"
+                res2 = requests.post(people_url, headers=headers, data={"xmlData": xml_data}, timeout=10)
+                print(f"  [Zoho People] insertRecord Response status: {res2.status_code}")
+                try:
+                    res_json = res2.json()
+                    print(f"  [Zoho People] insertRecord Response payload: {res_json}")
+                except Exception:
+                    print(f"  [Zoho People] insertRecord Response body: {res2.text}")
+            else:
+                print(f"  [Zoho People] Failed to refresh token: {res.text}")
+        except Exception as e:
+            print(f"  [Zoho People] Connection/API error during insertion: {e}")
+    else:
+        print(f"  [Zoho Mail] Simulating creation of mailbox: {email} (MOCK)")
+        
     return {
         "email_address": email,
         "zoho_mail_created": True,

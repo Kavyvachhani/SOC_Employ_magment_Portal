@@ -24,6 +24,48 @@ except ImportError:
 
 PORTAL_API_URL: str = os.getenv("PORTAL_API_URL", "").rstrip("/")
 
+@st.cache_data(ttl=300)
+def verify_zoho_connection(client_id, client_secret, refresh_token, domain):
+    if not (client_id and client_secret and refresh_token):
+        return False, "Missing credentials"
+    url = f"https://accounts.zoho.{domain}/oauth/v2/token"
+    
+    # Try 1: Refresh Token Flow (Standard path)
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token"
+    }
+    try:
+        import requests
+        res = requests.post(url, data=data, timeout=5)
+        if res.status_code == 200:
+            res_data = res.json()
+            if "access_token" in res_data:
+                return True, "Connected"
+    except Exception:
+        pass
+        
+    # Try 2: Authorization Code Flow (One-time fallback)
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": refresh_token,
+        "grant_type": "authorization_code"
+    }
+    try:
+        import requests
+        res = requests.post(url, data=data, timeout=5)
+        if res.status_code == 200:
+            res_data = res.json()
+            if "access_token" in res_data:
+                return True, "Connected"
+            return False, f"Auth Error: {res_data.get('error', 'unknown')}"
+        return False, f"HTTP Error {res.status_code}"
+    except Exception as e:
+        return False, f"Connection Failed: {e}"
+
 st.set_page_config(
     page_title="Manager Portal — Attest",
     page_icon="📬",
@@ -37,117 +79,126 @@ st.set_page_config(
 
 _CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-html, body, [class*="css"] { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+html, body, [class*="css"] { font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif !important; }
 
 /* Hide Streamlit default UI elements */
 header[data-testid="stHeader"], footer, #MainMenu, [data-testid="stToolbar"], [data-testid="stDecoration"], [data-testid="stStatusWidget"] { 
     display: none !important; 
 }
 
-/* Premium Dark Mode Background */
+/* Premium Dark Mode Background & Radial Glows */
 [data-testid="stAppViewContainer"], [data-testid="stMain"], .main .block-container { 
-    background-color: #0B0F1A !important; 
-    color: #F3F4F6 !important; 
+    background-color: #060913 !important; 
+    color: #E2E8F0 !important; 
 }
-
-/* Subtle dot pattern for texture */
 [data-testid="stAppViewContainer"]::before {
     content: ''; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-    background-image: radial-gradient(#1F2937 1px, transparent 1px);
-    background-size: 24px 24px;
-    z-index: -1; opacity: 0.6;
+    background: 
+        radial-gradient(circle at 80% 20%, rgba(99, 102, 241, 0.12) 0%, transparent 50%),
+        radial-gradient(circle at 10% 80%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+        radial-gradient(#1e293b 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 28px 28px;
+    z-index: -1; opacity: 0.8;
 }
 
-.block-container { padding-top: 3rem !important; padding-bottom: 5rem !important; max-width: 1100px !important; }
+.block-container { padding-top: 3.5rem !important; padding-bottom: 5rem !important; max-width: 1120px !important; }
 
-/* Clean Sidebar */
+/* Clean Glassmorphic Sidebar */
 [data-testid="stSidebar"] {
-    background: #0D1326 !important;
-    border-right: 1px solid #1F2937 !important;
+    background: #03060E !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
 }
-[data-testid="stSidebar"] * { color: #D1D5DB !important; }
+[data-testid="stSidebar"] * { color: #CBD5E1 !important; }
 
 /* Typography */
-h1, h2, h3, h4 { color: #F9FAFB !important; font-weight: 700 !important; letter-spacing: -0.02em !important; }
-h1 { font-size: 2.2rem !important; margin-bottom: 0.5rem !important; }
-p, .stMarkdown p { color: #9CA3AF !important; line-height: 1.6 !important; font-size: 1rem !important; }
-strong { color: #F3F4F6 !important; font-weight: 600 !important; }
+h1, h2, h3, h4, h5 { 
+    color: #F8FAFC !important; 
+    font-weight: 700 !important; 
+    letter-spacing: -0.025em !important; 
+}
+h1 { font-size: 2.3rem !important; margin-bottom: 0.6rem !important; background: linear-gradient(135deg, #FFFFFF 30%, #A5B4FC 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+p, .stMarkdown p { color: #94A3B8 !important; line-height: 1.65 !important; font-size: 0.98rem !important; }
+strong { color: #F1F5F9 !important; font-weight: 600 !important; }
 
 /* Glassmorphism Cards */
-[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stMetric"], [data-testid="stExpander"] {
-    background: rgba(17, 24, 39, 0.7) !important;
-    backdrop-filter: blur(12px) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    border-radius: 12px !important;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1) !important;
-    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease !important;
+[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stExpander"] {
+    background: rgba(13, 17, 33, 0.6) !important;
+    backdrop-filter: blur(16px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4) !important;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 [data-testid="stVerticalBlockBorderWrapper"]:hover { 
-    transform: translateY(-2px) !important; 
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2) !important;
-    border-color: rgba(99, 102, 241, 0.4) !important;
+    transform: translateY(-3px) !important; 
+    box-shadow: 0 20px 30px -10px rgba(0, 0, 0, 0.5), 0 0 20px rgba(99, 102, 241, 0.15) !important;
+    border-color: rgba(99, 102, 241, 0.3) !important;
 }
 
-/* Metric text adjustments */
-[data-testid="stMetricLabel"] { color: #9CA3AF !important; font-weight: 500 !important; font-size: 0.85rem !important; text-transform: uppercase; letter-spacing: 0.05em; }
-[data-testid="stMetricValue"] { color: #F9FAFB !important; font-weight: 700 !important; }
+/* Metric styling adjustments */
+[data-testid="stMetricLabel"] { color: #94A3B8 !important; font-weight: 500 !important; font-size: 0.8rem !important; text-transform: uppercase; letter-spacing: 0.06em; }
+[data-testid="stMetricValue"] { color: #F8FAFC !important; font-weight: 700 !important; font-size: 1.7rem !important; }
 
-/* Primary Action Buttons */
+/* Buttons */
 .stButton>button {
-    background: rgba(255, 255, 255, 0.05) !important;
-    color: #F9FAFB !important; 
-    border: 1px solid rgba(255, 255, 255, 0.1) !important; 
+    background: rgba(255, 255, 255, 0.04) !important;
+    color: #E2E8F0 !important; 
+    border: 1px solid rgba(255, 255, 255, 0.08) !important; 
     border-radius: 8px !important; 
     font-weight: 500 !important; 
     font-size: 0.95rem !important; 
-    padding: 0.5rem 1.2rem !important; 
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important; 
-    transition: all 0.2s ease !important;
+    padding: 0.55rem 1.3rem !important; 
+    box-shadow: 0 4px 6px rgba(0,0,0,0.15) !important; 
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 .stButton>button:hover { 
-    background: rgba(255, 255, 255, 0.1) !important;
-    transform: translateY(-1px) !important; 
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important; 
+    background: rgba(255, 255, 255, 0.08) !important;
+    border-color: rgba(255, 255, 255, 0.15) !important;
+    transform: translateY(-1.5px) !important; 
+    box-shadow: 0 8px 12px rgba(0,0,0,0.25) !important; 
+    color: #F8FAFC !important;
 }
 
-/* Approve Button (Accent) */
+/* Primary buttons */
 .stButton>button[kind="primary"] {
-    background: #6366F1 !important;
+    background: linear-gradient(135deg, #6366F1, #4F46E5) !important;
     border-color: #6366F1 !important;
-    box-shadow: 0 2px 4px rgba(99, 102, 241, 0.3) !important;
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3) !important;
+    color: #fff !important;
 }
 .stButton>button[kind="primary"]:hover {
-    background: #4F46E5 !important;
+    background: linear-gradient(135deg, #4F46E5, #4338CA) !important;
     border-color: #4F46E5 !important;
-    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.5) !important;
+    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5) !important;
 }
 
 /* Reject Button Variant */
 .reject-btn button {
-    background: rgba(220, 38, 38, 0.1) !important;
+    background: rgba(239, 68, 68, 0.08) !important;
     color: #FCA5A5 !important;
-    border: 1px solid rgba(239, 68, 68, 0.2) !important;
+    border: 1px solid rgba(239, 68, 68, 0.18) !important;
 }
 .reject-btn button:hover { 
-    background: rgba(220, 38, 38, 0.2) !important; 
-    border-color: rgba(239, 68, 68, 0.4) !important; 
+    background: rgba(239, 68, 68, 0.15) !important; 
+    border-color: rgba(239, 68, 68, 0.35) !important; 
+    color: #F8FAFC !important;
 }
 
 /* Download Buttons */
 [data-testid="stDownloadButton"]>button {
-    background: rgba(17, 24, 39, 0.8) !important;
-    border: 1px solid rgba(255, 255, 255, 0.15) !important;
-    color: #D1D5DB !important; 
+    background: rgba(13, 17, 33, 0.8) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    color: #CBD5E1 !important; 
     border-radius: 8px !important;
 }
 [data-testid="stDownloadButton"]>button:hover { 
-    background: rgba(31, 41, 55, 0.9) !important; 
-    border-color: rgba(255, 255, 255, 0.25) !important; 
-    color: #F9FAFB !important; 
+    background: rgba(24, 30, 56, 0.9) !important; 
+    border-color: rgba(255, 255, 255, 0.22) !important; 
+    color: #F8FAFC !important; 
 }
 
-hr { border-color: #1F2937 !important; margin: 2.5rem 0 !important; border-top-width: 1px !important; }
+hr { border-color: rgba(255, 255, 255, 0.06) !important; margin: 2.2rem 0 !important; }
 </style>
 """
 
@@ -234,12 +285,35 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.divider()
+    
+    zoho_id = os.getenv("ZOHO_CLIENT_ID")
+    zoho_secret = os.getenv("ZOHO_CLIENT_SECRET")
+    zoho_refresh = os.getenv("ZOHO_REFRESH_TOKEN")
+    zoho_domain = os.getenv("ZOHO_DOMAIN", "in")
+    zoho_ok = bool(zoho_id and zoho_secret and zoho_refresh)
+    if zoho_ok:
+        connected, reason = verify_zoho_connection(zoho_id, zoho_secret, zoho_refresh, zoho_domain)
+        if connected:
+            zoho_color = "#4ade80"
+            zoho_label = "✓ Zoho API (REAL - Connected)"
+        else:
+            zoho_color = "#f87171"
+            zoho_label = f"⚠ Zoho API (REAL - Auth Error)"
+    else:
+        zoho_color = "#60a5fa"
+        zoho_label = "ℹ Zoho API (MOCK)"
+    
     st.markdown(
-        '<div style="background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.22);'
-        'border-radius:8px;padding:10px 12px;">'
-        '<div style="color:#60a5fa;font-weight:600;font-size:0.82rem;">☁️ AWS Cloud Mode</div>'
-        '<div style="color:#4a5170;font-size:0.76rem;margin-top:2px;">S3 · Lambda · GitHub Actions</div>'
-        '</div>',
+        f'<div style="background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.22);'
+        f'border-radius:8px;padding:10px 12px;margin-bottom:8px;">'
+        f'<div style="color:#60a5fa;font-weight:600;font-size:0.82rem;">☁️ AWS Cloud Mode</div>'
+        f'<div style="color:#4a5170;font-size:0.76rem;margin-top:2px;">S3 · Lambda · GitHub Actions</div>'
+        f'</div>'
+        f'<div style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.22);'
+        f'border-radius:8px;padding:10px 12px;">'
+        f'<div style="color:#a5b4fc;font-weight:600;font-size:0.82rem;">👥 Zoho HR Integration</div>'
+        f'<div style="color:{zoho_color};font-size:0.76rem;margin-top:2px;">{zoho_label}</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
     st.divider()
@@ -394,6 +468,26 @@ else:
                 approved_key = f"approved_{emp_id}"
                 if st.session_state.get(approved_key):
                     st.success("✅ Approved")
+                    password_val = "PasswordResetRequired"
+                    try:
+                        ev = _portal_api("GET", f"/portal/evidence?emp_id={emp_id}")
+                        urls = ev.get("download_urls", {})
+                        if "aws-access-credentials.csv" in urls:
+                            import urllib.request
+                            import csv
+                            req = urllib.request.Request(urls["aws-access-credentials.csv"])
+                            with urllib.request.urlopen(req, timeout=5) as resp:
+                                csv_text = resp.read().decode('utf-8').strip()
+                                lines = csv_text.split('\n')
+                                if len(lines) >= 2:
+                                    reader = csv.reader(lines)
+                                    header = next(reader)
+                                    row = next(reader)
+                                    creds = dict(zip(header, row))
+                                    password_val = creds.get("temp_password") or creds.get("temporary_password") or "PasswordResetRequired"
+                    except Exception:
+                        pass
+
                     with st.expander("View Provisioned Resources", expanded=True):
                         st.markdown(
                             f'<div style="margin-top:12px;background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);">'
@@ -401,7 +495,7 @@ else:
                             f'<div style="display:flex;flex-direction:column;gap:8px;">'
                             f'  <div><span style="color:#9CA3AF;font-size:0.85rem;display:inline-block;width:90px;">Zoho Email:</span> <code style="color:#60A5FA;background:rgba(96,165,250,0.1);padding:2px 6px;border-radius:4px;">{zoho_email}</code></div>'
                             f'  <div><span style="color:#9CA3AF;font-size:0.85rem;display:inline-block;width:90px;">IAM User:</span> <code style="color:#FBBF24;background:rgba(251,191,36,0.1);padding:2px 6px;border-radius:4px;">{iam_username}</code></div>'
-                            f'  <div><span style="color:#9CA3AF;font-size:0.85rem;display:inline-block;width:90px;">Password:</span> <code style="color:#F87171;background:rgba(248,113,113,0.1);padding:2px 6px;border-radius:4px;">MockPassword123!</code></div>'
+                            f'  <div><span style="color:#9CA3AF;font-size:0.85rem;display:inline-block;width:90px;">Password:</span> <code style="color:#F87171;background:rgba(248,113,113,0.1);padding:2px 6px;border-radius:4px;">{password_val}</code></div>'
                             f'  <div><span style="color:#9CA3AF;font-size:0.85rem;display:inline-block;width:90px;">Access Level:</span> <span style="color:#E5E7EB;font-size:0.85rem;">{access_policies}</span></div>'
                             f'</div>'
                             f'<div style="margin-top:10px;font-size:0.75rem;color:#6B7280;font-style:italic;">*(Evidence synced to S3 and GitHub Actions)*</div>'
