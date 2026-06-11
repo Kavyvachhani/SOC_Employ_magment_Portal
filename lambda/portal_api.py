@@ -301,35 +301,39 @@ def _provision_real_zoho_lambda(emp_id: str, emp_name: str, role: str, zoho_emai
 
     first_name = emp_name.split(' ')[0]
     last_name = (emp_name.split(' ')[1] if len(emp_name.split(' ')) > 1 else "Employee")
-    department = "Engineering" if "engineer" in role.lower() or "developer" in role.lower() else "Product"
-    
-    xml_data = f"""
-    <Record>
-        <field name="EmployeeID">{emp_id}</field>
-        <field name="FirstName">{first_name}</field>
-        <field name="LastName">{last_name}</field>
-        <field name="EmailID">{zoho_email}</field>
-        <field name="Department">{department}</field>
-        <field name="Designation">{role}</field>
-    </Record>
-    """
-    
-    people_url = f"https://people.zoho.{domain}/people/api/forms/xml/employee/insertRecord"
-    post_data = urllib.parse.urlencode({"xmlData": xml_data}).encode()
-    req2 = urllib.request.Request(
-        people_url,
-        data=post_data,
-        headers={
-            "Authorization": f"Zoho-oauthtoken {access_token}",
-            "Content-Type": "application/x-www-form-urlencoded"
-        },
-        method="POST"
-    )
-    
-    try:
+
+    # The XML insertRecord endpoint returns 7019 on this org — use the JSON API.
+    record = {
+        "EmployeeID": emp_id,
+        "FirstName": first_name,
+        "LastName": last_name,
+        "EmailID": zoho_email,
+        "Designation": role,
+    }
+    people_url = f"https://people.zoho.{domain}/people/api/forms/json/employee/insertRecord"
+
+    def _insert(rec: dict) -> dict:
+        post_data = urllib.parse.urlencode({"inputData": json.dumps(rec)}).encode()
+        req2 = urllib.request.Request(
+            people_url,
+            data=post_data,
+            headers={
+                "Authorization": f"Zoho-oauthtoken {access_token}",
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            method="POST"
+        )
         with urllib.request.urlopen(req2, timeout=10) as resp2:
-            body2 = resp2.read().decode()
-            print(f"[Zoho API] insertRecord Response: {body2}")
+            return json.loads(resp2.read().decode())
+
+    try:
+        res = _insert(record)
+        errors = res.get("response", {}).get("errors", {})
+        # Designation is a lookup field on some orgs — retry without it
+        if errors and "Designation" in str(errors.get("message", "")):
+            record.pop("Designation", None)
+            res = _insert(record)
+        print(f"[Zoho API] insertRecord Response: {json.dumps(res)}")
     except Exception as e:
         print(f"[Zoho API] Exception during insertRecord: {e}")
 
