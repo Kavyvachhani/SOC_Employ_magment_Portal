@@ -1,0 +1,62 @@
+name: Configure Zoho on Approval Lambda
+
+# Adds/updates the ZOHO_* environment variables on attest-approval-handler
+# so the approval flow creates real Zoho People records instead of
+# simulating them. Merges with the existing variables — nothing is removed.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/configure-zoho-lambda.yml"
+
+permissions:
+  contents: read
+
+env:
+  FUNCTION_NAME: attest-approval-handler
+
+jobs:
+  configure:
+    name: Set ZOHO_* env vars on Lambda
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Merge ZOHO_* into Lambda environment
+        run: |
+          set -euo pipefail
+
+          CURRENT=$(aws lambda get-function-configuration \
+            --function-name "$FUNCTION_NAME" \
+            --query 'Environment.Variables' \
+            --output json --no-cli-pager)
+
+          MERGED=$(echo "$CURRENT" | jq \
+            --arg id     "${{ secrets.ZOHO_CLIENT_ID }}" \
+            --arg secret "${{ secrets.ZOHO_CLIENT_SECRET }}" \
+            --arg token  "${{ secrets.ZOHO_REFRESH_TOKEN }}" \
+            --arg domain "${{ secrets.ZOHO_DOMAIN }}" \
+            '. + {ZOHO_CLIENT_ID: $id, ZOHO_CLIENT_SECRET: $secret, ZOHO_REFRESH_TOKEN: $token, ZOHO_DOMAIN: $domain}')
+
+          aws lambda update-function-configuration \
+            --function-name "$FUNCTION_NAME" \
+            --environment "{\"Variables\": $MERGED}" \
+            --no-cli-pager > /dev/null
+
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME"
+          echo "Lambda configuration updated."
+
+      - name: Verify ZOHO_* keys present (values not printed)
+        run: |
+          aws lambda get-function-configuration \
+            --function-name "$FUNCTION_NAME" \
+            --query 'Environment.Variables | keys(@)' \
+            --output json --no-cli-pager
