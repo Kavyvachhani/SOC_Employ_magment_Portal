@@ -208,7 +208,8 @@ def get_evidence(event: dict) -> dict:
         "signed-security.pdf", "signed-handbook.pdf", "signed-acceptable_use.pdf",
         "nda-audit-trail.json", "photo.jpg", "access-granted.csv",
         "aws-access-credentials.csv", "combined-evidence.pdf", "evidence-index.json",
-        "onboarding-report.pdf",
+        "onboarding-report.pdf", "kt-document.pdf", "kt-document.txt", "kt-document.docx",
+        "offboarding-report.pdf", "offboarding-evidence.json", "offboarding-evidence.csv"
     ]
 
     urls = {}
@@ -361,7 +362,8 @@ def manager_approve(event: dict) -> dict:
         s3.put_object(Bucket=S3_BUCKET, Key=key, Body=json.dumps(data, indent=2).encode(), ContentType="application/json")
         if action == "approve" and req_type == "offboarding":
             try:
-                process_offboarding(emp_id, approver)
+                wipe_selections = body.get("wipe_selections", {})
+                process_offboarding(emp_id, approver, wipe_selections)
             except Exception as e:
                 print(f"Error processing offboarding: {e}")
                 
@@ -446,8 +448,16 @@ def list_pending(event: dict) -> dict:
         return err(str(e), 500)
 
 
-def process_offboarding(emp_id: str, approver: str):
+def process_offboarding(emp_id: str, approver: str, wipe_selections: dict = None):
     """Perform real deprovisioning and CloudTrail auditing for offboarding."""
+    if wipe_selections is None:
+        wipe_selections = {
+            "wipe_iam_access_keys": True,
+            "wipe_iam_console_profile": True,
+            "wipe_zoho_mailbox": True,
+            "delete_iam_user": True
+        }
+        
     prefix = f"employees/{emp_id}"
     try:
         r = s3.get_object(Bucket=S3_BUCKET, Key=f"{prefix}/employee.json")
@@ -487,35 +497,51 @@ def process_offboarding(emp_id: str, approver: str):
     try:
         iam = boto3.client("iam")
         # Login Profile
-        try: iam.delete_login_profile(UserName=username); revocation["actions"].append("Deleted Login Profile")
-        except: pass
+        if wipe_selections.get("wipe_iam_console_profile", True):
+            try: iam.delete_login_profile(UserName=username); revocation["actions"].append("Deleted Login Profile")
+            except Exception as e: print(f"Login profile wipe skipped/failed: {e}")
+        else:
+            revocation["actions"].append("Login Profile Retained (Wipe Skipped)")
+
         # Access Keys
-        try:
-            for k in iam.list_access_keys(UserName=username).get("AccessKeyMetadata", []):
-                kid = k["AccessKeyId"]
-                iam.update_access_key(UserName=username, AccessKeyId=kid, Status="Inactive")
-                iam.delete_access_key(UserName=username, AccessKeyId=kid)
-                revocation["actions"].append(f"Deleted Access Key {kid}")
-        except: pass
+        if wipe_selections.get("wipe_iam_access_keys", True):
+            try:
+                for k in iam.list_access_keys(UserName=username).get("AccessKeyMetadata", []):
+                    kid = k["AccessKeyId"]
+                    iam.update_access_key(UserName=username, AccessKeyId=kid, Status="Inactive")
+                    iam.delete_access_key(UserName=username, AccessKeyId=kid)
+                    revocation["actions"].append(f"Deleted Access Key {kid}")
+            except Exception as e: print(f"Access key wipe skipped/failed: {e}")
+        else:
+            revocation["actions"].append("AWS Access Keys Retained (Wipe Skipped)")
+
         # Policies
         try:
             for p in iam.list_attached_user_policies(UserName=username).get("AttachedPolicies", []):
                 iam.detach_user_policy(UserName=username, PolicyArn=p["PolicyArn"])
                 revocation["actions"].append(f"Detached Policy {p['PolicyArn']}")
-        except: pass
+        except Exception as e: print(f"Policy detachment skipped/failed: {e}")
+
         # Delete user
-        try: iam.delete_user(UserName=username); revocation["actions"].append(f"Deleted IAM User {username}")
-        except: pass
+        if wipe_selections.get("delete_iam_user", True):
+            try: iam.delete_user(UserName=username); revocation["actions"].append(f"Deleted IAM User {username}")
+            except Exception as e: print(f"IAM User deletion skipped/failed: {e}")
+        else:
+            revocation["actions"].append("IAM User Account Retained (Deletion Skipped)")
+
     except Exception as e:
         revocation["success"] = False
         revocation["error"] = str(e)
         
     # Zoho Mail
     zoho_email = f"{employee_data.get('name', 'employee').replace(' ', '.').lower()}@attest-security.com"
-    revocation["actions"].extend([
-        f"Suspended Zoho Mail Account ({zoho_email})",
-        f"Revoked App Passwords for {zoho_email}"
-    ])
+    if wipe_selections.get("wipe_zoho_mailbox", True):
+        revocation["actions"].extend([
+            f"Suspended Zoho Mail Account ({zoho_email})",
+            f"Revoked App Passwords for {zoho_email}"
+        ])
+    else:
+        revocation["actions"].append(f"Retained Zoho Mail Account ({zoho_email}) (Suspension Skipped)")
     
     # 3. Generate PDF
     try:
@@ -606,17 +632,78 @@ def process_offboarding(emp_id: str, approver: str):
             pdf.set_x(20)
             
         pdf.ln(4)
+
+        # Load pending-offboard details if any to list KT Handover and checklist in PDF
+        try:
+            r_off = s3.get_object(Bucket=S3_BUCKET, Key=f"{prefix}/pending-offboard.json")
+            off_data = json.loads(r_off["Body"].read())
+        except Exception:
+            off_data = {}
+        tsign = off_data.get("team_signoff", {})
+        esig = off_data.get("exit_signatures", {})
+
+        # ─── Knowledge Transfer & Handover Attestation ─────────────────────────
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(79, 70, 229)
+        pdf.cell(0, 8, "3. Knowledge Transfer & Handover Attestation", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_text_color(33, 37, 41)
+        pdf.ln(1)
+
+        # Attestation checklist
+        pdf.set_fill_color(241, 245, 249)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(90, 7.5, "Exit Verification Requirement", border=1, fill=True)
+        pdf.cell(80, 7.5, "Attestation Status / Value", border=1, fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+        pdf.set_font("Helvetica", "", 9)
+        kt_recipient = tsign.get("recipient", "—")
+        kt_doc_filename = off_data.get("kt_document_key", "—").split("/")[-1] if off_data.get("kt_document_key") else "—"
+
+        for label, val in [
+            ("Knowledge Transfer Recipient", kt_recipient),
+            ("KT Document S3 Archive", kt_doc_filename),
+            ("Hardware Assets Returned", "CONFIRMED" if tsign.get("assets_returned") else "PENDING"),
+            ("Local Credentials Purged", "CONFIRMED" if tsign.get("credentials_purged") else "PENDING"),
+            ("Code Commits Pushed to Origin", "CONFIRMED" if tsign.get("code_pushed") else "PENDING"),
+        ]:
+            pdf.cell(90, 7.5, f"  {label}", border=1)
+            pdf.set_font("Helvetica", "B" if val == "CONFIRMED" else 9)
+            if val == "CONFIRMED":
+                pdf.set_fill_color(240, 253, 250)
+                pdf.set_text_color(13, 148, 136)
+                pdf.cell(80, 7.5, f"  {val}", border=1, fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            elif val == "PENDING":
+                pdf.set_fill_color(254, 242, 242)
+                pdf.set_text_color(239, 68, 68)
+                pdf.cell(80, 7.5, f"  {val}", border=1, fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            else:
+                pdf.set_text_color(33, 37, 41)
+                pdf.cell(80, 7.5, f"  {val}", border=1, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_text_color(33, 37, 41)
+            pdf.set_font("Helvetica", "", 9)
+
+        if esig.get("signer_name"):
+            pdf.ln(2.5)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.cell(0, 5, "Exit Sign-off & Digital Signature Record:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_font("Courier", "", 8.5)
+            pdf.cell(0, 4.5, f"  - Legal Signer: {esig.get('signer_name')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.cell(0, 4.5, f"  - Timestamp:    {esig.get('timestamp')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.cell(0, 4.5, f"  - Client IP:     {esig.get('ip_address', '127.0.0.1')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_font("Helvetica", "", 9)
+
+        pdf.ln(4)
         
         # ─── CloudTrail Audit Summary ──────────────────────────────────────────
         pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(79, 70, 229)
-        pdf.cell(0, 8, "3. CloudTrail Audit logs Verification", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 8, "4. CloudTrail Audit logs Verification", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(33, 37, 41)
         pdf.set_font("Helvetica", "", 9)
         pdf.multi_cell(0, 5, f"Audit Check Success: A total of {len(audit_logs)} recent programmatic AWS API events were captured and successfully matched with the target profile '{emp_id}'. Full raw logs have been archived inside S3 at '{prefix}/offboarding-evidence.json'.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         
         # ─── Footer Audit Stamp ─────────────────────────────────────────────────────
-        pdf.ln(12)
+        pdf.ln(10)
         pdf.set_font("Helvetica", "I", 8)
         pdf.set_text_color(148, 163, 184) # Slate-400
         pdf.cell(0, 4.5, "This compliance revocation evidence report was generated automatically via the Attest SOC 2 Evidence Vault.", align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
@@ -672,6 +759,9 @@ def initiate_offboard(event: dict) -> dict:
     body = json.loads(event.get("body") or "{}")
     emp_id = body.get("emp_id", "")
     employee_data = body.get("employee_data", {})
+    kt_document_key = body.get("kt_document_key", "")
+    team_signoff = body.get("team_signoff", {})
+    exit_signatures = body.get("exit_signatures", {})
     
     if not emp_id:
         return err("emp_id required")
@@ -683,7 +773,10 @@ def initiate_offboard(event: dict) -> dict:
         "designation": employee_data.get("designation", "Employee"),
         "status": "pending",
         "requested_at": now_utc(),
-        "type": "offboarding"
+        "type": "offboarding",
+        "kt_document_key": kt_document_key,
+        "team_signoff": team_signoff,
+        "exit_signatures": exit_signatures
     }
     
     try:

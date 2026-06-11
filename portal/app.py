@@ -899,8 +899,9 @@ def step_done() -> None:
                             f'<code style="color:#e2e8f0;font-size:0.95rem;background:transparent;padding:0;">{username_val}</code></div>'
                             
                             f'<div style="background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">'
-                            f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">Zoho Email</div>'
-                            f'<code style="color:#e2e8f0;font-size:0.95rem;background:transparent;padding:0;">{zoho_email_val}</code></div>'
+                            f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">Zoho Email & Portal</div>'
+                            f'<code style="color:#e2e8f0;font-size:0.95rem;background:transparent;padding:0;">{zoho_email_val}</code>'
+                            f'<div style="margin-top:4px;font-size:0.8rem;"><a href="https://mail.zoho.in" target="_blank" style="color:#6366F1;text-decoration:none;font-weight:600;">Login to Zoho Mail →</a></div></div>'
                             
                             f'<div style="background:rgba(255,255,255,0.03);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">'
                             f'<div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;margin-bottom:6px;font-weight:500;">Access Key ID</div>'
@@ -994,20 +995,157 @@ def step_offboard_init() -> None:
             except Exception as e: st.error(f"Lookup failed: {e}")
 
 def step_offboard_audit() -> None:
-    _step_header(2, "Audit & Backup", "Reviewing active access before revocation.")
+    _step_header(2, "Audit & Backup", "Reviewing active access, uploading KT handover, and exit checklist.")
     if not _api_guard(): return
     data = st.session_state.employee_data or {}
-    with st.container(border=True):
-        st.metric("Name", data.get("name","—"))
-        st.metric("Role", data.get("designation","—"))
-    st.info("IAM audit is performed server-side. Submit below to request manager approval.")
-    if st.button("Request Manager Approval →", type="primary"):
-        try:
-            _api("POST", "/portal/offboard-request", body={"emp_id": st.session_state.emp_id, "employee_data": data})
-            st.session_state.step = "offboard_approve"
-            st.rerun()
-        except Exception as e:
-            st.error(f"Failed to submit request: {e}")
+    emp_id = st.session_state.emp_id
+
+    # 1. Access Scoping & Resource Analysis (Shared vs Individual)
+    st.markdown("##### 🔍 Detected Resource & Access Profile")
+    
+    # Retrieve provisioned info from S3 evidence
+    username_val = "—"
+    zoho_email_val = "—"
+    access_key_val = "—"
+    policy_arn_val = "AmazonS3ReadOnlyAccess" # default fallback
+    
+    try:
+        ev_data = _api("GET", f"/portal/evidence?emp_id={emp_id}")
+        urls = ev_data.get("download_urls", {})
+        if "aws-access-credentials.csv" in urls:
+            import urllib.request
+            import csv
+            req = urllib.request.Request(urls["aws-access-credentials.csv"])
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                csv_text = resp.read().decode('utf-8').strip()
+                lines = csv_text.split('\n')
+                if len(lines) >= 2:
+                    reader = csv.reader(lines)
+                    header = next(reader)
+                    row = next(reader)
+                    creds = dict(zip(header, row))
+                    username_val = creds.get("username") or creds.get("iam_username") or "—"
+                    zoho_email_val = creds.get("zoho_email") or creds.get("company_email") or "—"
+                    access_key_val = creds.get("access_key_id") or "—"
+        if "access-granted.csv" in urls:
+            req = urllib.request.Request(urls["access-granted.csv"])
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                csv_text = resp.read().decode('utf-8').strip()
+                lines = csv_text.split('\n')
+                if len(lines) >= 2:
+                    reader = csv.reader(lines)
+                    header = next(reader)
+                    row = next(reader)
+                    granted = dict(zip(header, row))
+                    policy_arn_val = granted.get("policy_arn") or "AmazonS3ReadOnlyAccess"
+    except Exception:
+        pass
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(
+            f'<div style="background:rgba(255,255,255,0.02);padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);height:100%;">'
+            f'<div style="color:#f87171;font-size:0.82rem;font-weight:700;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:6px;">'
+            f'<span>🛑</span> Individual Access (To Be Wiped)</div>'
+            f'<div style="display:flex;flex-direction:column;gap:8px;font-size:0.85rem;color:#cbd5e1;">'
+            f'  <div><b>IAM Account:</b> <code>{username_val}</code></div>'
+            f'  <div><b>API Access Key:</b> <code>{access_key_val}</code></div>'
+            f'  <div><b>Zoho Mailbox:</b> <code>{zoho_email_val}</code></div>'
+            f'</div></div>',
+            unsafe_allow_html=True
+        )
+    with col2:
+        st.markdown(
+            f'<div style="background:rgba(255,255,255,0.02);padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);height:100%;">'
+            f'<div style="color:#60a5fa;font-size:0.82rem;font-weight:700;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:6px;">'
+            f'<span>👥</span> Shared Resources (Access To Be Revoked)</div>'
+            f'<div style="display:flex;flex-direction:column;gap:8px;font-size:0.85rem;color:#cbd5e1;">'
+            f'  <div><b>Attached Policy:</b> <span style="font-family:monospace;font-size:0.8rem;background:rgba(255,255,255,0.05);padding:1px 4px;border-radius:3px;">{policy_arn_val.split("/")[-1]}</span></div>'
+            f'  <div><b>S3 Evidence Vault:</b> <span style="color:#94a3b8;">Read-Only</span></div>'
+            f'  <div><b>AWS CodeCommit:</b> <span style="color:#94a3b8;">Read-Only Repositories</span></div>'
+            f'  <div><b>CloudWatch Dashboard:</b> <span style="color:#94a3b8;">Read-Only Logs</span></div>'
+            f'</div></div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("##### 🤝 Knowledge Transfer (KT) Handover")
+    
+    kt_recipient = st.selectbox(
+        "Assign Handover Recipient / Teammate",
+        ["Diana Designer (HR/Ops)", "Mia QA (Engineering)", "Jack Intern (Engineering)", "Other Teammate"]
+    )
+    if kt_recipient == "Other Teammate":
+        kt_recipient = st.text_input("Enter Teammate Name", placeholder="Teammate Name").strip()
+
+    uploaded_kt = st.file_uploader("Upload Knowledge Transfer (KT) Handover Document", type=["pdf", "txt", "docx"])
+    kt_notes = st.text_area("Handover Summary / Notes", placeholder="Detail any active projects, credentials location, or critical handover notes...")
+
+    st.markdown("##### ⚙️ Exit Hand-off Verification Checklist")
+    chk_assets = st.checkbox("IT assets returned (company laptop, building keycards, hardware tokens)")
+    chk_creds = st.checkbox("Local environment credentials purged (local AWS config, GitHub personal access tokens, Slack sessions)")
+    chk_code = st.checkbox("All working branches and active code commits pushed to the origin repository")
+
+    st.markdown("##### 📜 Legal Exit Acknowledgment")
+    st.info(
+        "By signing below, I certify that I have completed all handover documentation, returned company assets, "
+        "deleted company credentials from my personal devices, and acknowledge that my post-employment NDA "
+        "obligations remain in full force."
+    )
+    exit_sig_name = st.text_input("Type your full legal name to sign exit acknowledgment")
+
+    if st.button("Request Manager Approval →", type="primary", use_container_width=True):
+        if not kt_recipient:
+            st.error("Please specify a handover recipient.")
+            return
+        if not uploaded_kt:
+            st.error("Please upload a Knowledge Transfer (KT) document.")
+            return
+        if not (chk_assets and chk_creds and chk_code):
+            st.error("Please verify and tick all exit hand-off checkmarks.")
+            return
+        if not exit_sig_name.strip():
+            st.error("Please sign the exit acknowledgment by typing your full name.")
+            return
+
+        with st.spinner("Processing exit handover & uploading KT document..."):
+            try:
+                # 1. Request presigned upload URL for S3
+                ext = uploaded_kt.name.rsplit(".", 1)[-1].lower() if "." in uploaded_kt.name else "pdf"
+                filename = f"kt-document.{ext}"
+                
+                pu = _api("POST", "/portal/signed-upload-url", {"emp_id": emp_id, "filename": filename})
+                upload_url = pu["upload_url"]
+                s3_key = pu["s3_key"]
+                
+                # 2. Upload KT file using presigned PUT URL
+                mime_map = {"pdf": "application/pdf", "txt": "text/plain", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+                mime = mime_map.get(ext, "application/octet-stream")
+                _put_presigned(upload_url, uploaded_kt.getvalue(), mime)
+                
+                # 3. Submit offboarding request payload
+                payload = {
+                    "emp_id": emp_id,
+                    "employee_data": data,
+                    "kt_document_key": s3_key,
+                    "team_signoff": {
+                        "recipient": kt_recipient,
+                        "assets_returned": chk_assets,
+                        "credentials_purged": chk_creds,
+                        "code_pushed": chk_code,
+                        "notes": kt_notes
+                    },
+                    "exit_signatures": {
+                        "signer_name": exit_sig_name,
+                        "timestamp": now_utc(),
+                        "ip_address": "127.0.0.1" # standard placeholder
+                    }
+                }
+                _api("POST", "/portal/offboard-request", body=payload)
+                st.session_state.step = "offboard_approve"
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to submit exit request: {e}")
 
 def step_offboard_approve() -> None:
     _step_header(3, "Manager Verification", "Waiting for manager to approve the access wipe.")

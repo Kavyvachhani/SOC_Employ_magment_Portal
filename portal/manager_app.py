@@ -258,11 +258,12 @@ def handle_onboarding(emp_id: str, token: str, action: str) -> bool:
         return False
 
 
-def handle_offboarding(emp_id: str, action: str) -> bool:
+def handle_offboarding(emp_id: str, action: str, wipe_selections: dict = None) -> bool:
     try:
         _portal_api("POST", "/portal/approve", {
             "emp_id": emp_id, "action": action,
             "approver": _manager_name(), "type": "offboarding",
+            "wipe_selections": wipe_selections
         })
         st.success(f"✅ Offboarding **{action}d** for `{emp_id}`.")
         return True
@@ -430,6 +431,13 @@ else:
                 ]
                 if policies and is_onboarding:
                     info_items.append(("Docs Signed", ", ".join(policies)))
+                if not is_onboarding:
+                    tsign = data.get("team_signoff", {})
+                    esig = data.get("exit_signatures", {})
+                    if tsign.get("recipient"):
+                        info_items.append(("KT Recipient", tsign.get("recipient")))
+                    if esig.get("signer_name"):
+                        info_items.append(("Signed Exit", esig.get("signer_name")))
 
                 rows_html = "".join(
                     f'<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
@@ -443,6 +451,13 @@ else:
                     f'border-radius:8px;padding:12px 14px;">{rows_html}</div>',
                     unsafe_allow_html=True,
                 )
+
+                wipe_selections = {
+                    "wipe_iam_access_keys": True,
+                    "wipe_iam_console_profile": True,
+                    "wipe_zoho_mailbox": True,
+                    "delete_iam_user": True
+                }
 
                 if is_onboarding:
                     # Preview Provisioning Details
@@ -462,6 +477,58 @@ else:
                         f'</div></div>',
                         unsafe_allow_html=True
                     )
+                else:
+                    # Offboarding details & KT Document
+                    tsign = data.get("team_signoff", {})
+                    esig = data.get("exit_signatures", {})
+                    
+                    # Fetch KT presigned URL
+                    kt_url = None
+                    try:
+                        ev = _portal_api("GET", f"/portal/evidence?emp_id={emp_id}")
+                        urls = ev.get("download_urls", {})
+                        for k, v in urls.items():
+                            if k.startswith("kt-document"):
+                                kt_url = v
+                                break
+                    except Exception:
+                        pass
+
+                    st.markdown("<div style='margin-top:10px;'></div>", unsafe_allow_html=True)
+                    st.markdown("###### 🤝 Handover & KT Verification")
+                    
+                    if kt_url:
+                        st.link_button("📄 View KT Document", kt_url, use_container_width=True)
+                    else:
+                        st.warning("⚠️ No KT Document uploaded.")
+                        
+                    if tsign.get("notes"):
+                        st.info(f"**Handover Notes:** {tsign.get('notes')}")
+
+                    st.markdown(
+                        f'<div style="background:rgba(255,255,255,0.02);padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);margin-top:10px;">'
+                        f'<div style="color:#f43f5e;font-size:0.8rem;font-weight:700;margin-bottom:6px;text-transform:uppercase;">Exit Checklists Checked</div>'
+                        f'<div style="color:#9ca3af;font-size:0.82rem;">'
+                        f'  ✓ Hardware Assets Returned: {"Yes" if tsign.get("assets_returned") else "No"}<br/>'
+                        f'  ✓ Local Credentials Purged: {"Yes" if tsign.get("credentials_purged") else "No"}<br/>'
+                        f'  ✓ Code Pushed to Repo: {"Yes" if tsign.get("code_pushed") else "No"}'
+                        f'</div></div>',
+                        unsafe_allow_html=True
+                    )
+
+                    st.markdown("<div style='margin-top:10px;'></div>", unsafe_allow_html=True)
+                    st.markdown("###### ⚙️ Scoped Access Wipe Selections")
+                    w_keys = st.checkbox("Wipe Programmatic AWS Access Keys", value=True, key=f"wipe_keys_{emp_id}")
+                    w_console = st.checkbox("Delete AWS IAM Login Profile", value=True, key=f"wipe_console_{emp_id}")
+                    w_zoho = st.checkbox("Suspend Zoho Mailbox", value=True, key=f"wipe_zoho_{emp_id}")
+                    w_user = st.checkbox("Permanently Delete AWS IAM User Account", value=True, key=f"wipe_user_{emp_id}")
+                    
+                    wipe_selections = {
+                        "wipe_iam_access_keys": w_keys,
+                        "wipe_iam_console_profile": w_console,
+                        "wipe_zoho_mailbox": w_zoho,
+                        "delete_iam_user": w_user
+                    }
 
             with col_act:
                 # Use session state to track if we just approved this
@@ -505,7 +572,7 @@ else:
                     st.slider("Confidence level of approval", 0, 100, 100, key=f"slide_{emp_id}")
                 else:
                     if st.button("Approve", key=f"app_{emp_id}", type="primary", use_container_width=True):
-                        success = handle_onboarding(emp_id, data.get("token",""), "approve") if is_onboarding else handle_offboarding(emp_id, "approve")
+                        success = handle_onboarding(emp_id, data.get("token",""), "approve") if is_onboarding else handle_offboarding(emp_id, "approve", wipe_selections)
                         if success:
                             st.session_state[approved_key] = True
 
@@ -516,17 +583,19 @@ else:
                         st.session_state[f"rejected_{emp_id}"] = True
                     st.markdown('</div>', unsafe_allow_html=True)
 
-            # Evidence download links for completed onboarding
-            if is_onboarding and data.get("status") == "approved":
+            # Evidence download links for completed onboarding/offboarding
+            if data.get("status") == "approved":
                 st.divider()
                 st.markdown('<div style="color:#8b92a8;font-size:0.8rem;margin-bottom:6px;">Evidence in vault:</div>', unsafe_allow_html=True)
                 try:
                     ev = _portal_api("GET", f"/portal/evidence?emp_id={emp_id}")
                     urls = ev.get("download_urls", {})
                     dl_cols = st.columns(3)
-                    for i, (fname, url) in enumerate(urls.items()):
-                        with dl_cols[i % 3]:
+                    found = 0
+                    for fname, url in urls.items():
+                        with dl_cols[found % 3]:
                             st.link_button(f"📄 {fname}", url, use_container_width=True)
+                        found += 1
                 except Exception:
                     pass
 
