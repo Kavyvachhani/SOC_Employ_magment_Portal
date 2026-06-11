@@ -1,8 +1,9 @@
-name: Configure Zoho on Approval Lambda
+name: Configure Zoho on Lambdas
 
-# Adds/updates the ZOHO_* environment variables on attest-approval-handler
-# so the approval flow creates real Zoho People records instead of
-# simulating them. Merges with the existing variables — nothing is removed.
+# Adds/updates the ZOHO_* environment variables on the Lambdas that
+# provision employees (approval-handler and portal-api) so they create
+# real Zoho People records instead of simulating them. Merges with the
+# existing variables — nothing is removed.
 
 on:
   workflow_dispatch:
@@ -14,13 +15,18 @@ on:
 permissions:
   contents: read
 
-env:
-  FUNCTION_NAME: attest-approval-handler
-
 jobs:
   configure:
-    name: Set ZOHO_* env vars on Lambda
+    name: Set ZOHO_* on ${{ matrix.function }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        function:
+          - attest-approval-handler
+          - attest-portal-api
+    env:
+      FUNCTION_NAME: ${{ matrix.function }}
 
     steps:
       - name: Configure AWS credentials
